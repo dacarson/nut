@@ -20,10 +20,6 @@
 #EGREP = egrep
 EGREP = grep -E
 
-all:
-
-all-am-local all-local: $(abs_top_builddir)/docs/man/.prep-src-docs
-
 # Base configuration and client manpages, always installed
 SRC_CONF_PAGES = \
 	nut.conf.txt \
@@ -711,17 +707,17 @@ HTML_MODBUS_MANS = phoenixcontact_modbus.html \
 endif ! SOME_DRIVERS
 
 # (--with-linux_i2c)
-SRC_LINUX_I2C_PAGES = asem.txt pijuice.txt
+SRC_LINUX_I2C_PAGES = asem.txt pijuice.txt upsplus.txt
 if ! SOME_DRIVERS
 if WITH_MANS
-MAN_LINUX_I2C_PAGES = asem.8 pijuice.8
+MAN_LINUX_I2C_PAGES = asem.8 pijuice.8 upsplus.8
 endif WITH_MANS
 
 if WITH_LINUX_I2C
 man8_MANS += $(MAN_LINUX_I2C_PAGES)
 endif WITH_LINUX_I2C
 
-HTML_LINUX_I2C_MANS = asem.html pijuice.html
+HTML_LINUX_I2C_MANS = asem.html pijuice.html upsplus.html
 endif ! SOME_DRIVERS
 
 # (--with-gpio)
@@ -841,7 +837,7 @@ LINKMAN_INCLUDE_GENERATED = linkman-driver-names.txt linkman-drivertool-names.tx
 LINKMAN_INCLUDE_CONSUMERS = index.txt upsd.txt nutupsdrv.txt
 
 linkman-driver-names.txt:
-	@if test x"$(abs_srcdir)" != x"$(abs_builddir)" ; then \
+	@if test x"$(srcdir)" != x"$(builddir)" ; then \
 	    if ! test -s "$(builddir)/$@" && test -s "$(srcdir)/$(@F)" ; then \
 	        ln -fs "$(srcdir)/$(@F)" "$(builddir)/" ; \
 	    fi ; \
@@ -856,7 +852,7 @@ linkman-driver-names.txt:
 	@if test ! -s "$@" ; then echo "- No NUT drivers were built" > "$@" ; fi
 
 linkman-drivertool-names.txt:
-	@if test x"$(abs_srcdir)" != x"$(abs_builddir)" ; then \
+	@if test x"$(srcdir)" != x"$(builddir)" ; then \
 	    if ! test -s "$(builddir)/$@" && test -s "$(srcdir)/$(@F)" ; then \
 	        ln -fs "$(srcdir)/$(@F)" "$(builddir)/" ; \
 	    fi ; \
@@ -877,8 +873,7 @@ $(LINKMAN_INCLUDE_CONSUMERS): linkman-driver-names.txt linkman-drivertool-names.
 # git, and not part of tarball (to be in builddir) - so not in EXTRA_DIST.
 DISTCLEANFILES = $(LINKMAN_INCLUDE_GENERATED)
 
-# Make sure sources are there for out-of-tree builds:
-$(HTML_MANS) $(MAN_MANS) index.html: $(abs_top_builddir)/docs/man/.prep-src-docs
+all:
 
 all-html html-man: $(HTML_MANS) index.html
 
@@ -948,11 +943,11 @@ check-man-txt: $(SRC_ALL_PAGES)
 	    echo "FAILED man-source sanity check for:$$FAILED" >&2 ; file $$FAILED >&2 ; exit 1; \
 	fi; echo "PASSED man-source sanity check (checked $$CHECKED files)"; exit 0
 
-CLEANFILES = *-spellchecked .prep-src-docs *-prepped
+CLEANFILES = *-spellchecked
 
-SUFFIXES = .txt-prepped .txt .html .1 .3 .5 .8
+SUFFIXES = .txt .html .1 .3 .5 .8
 
-# For builds with allowed installation of prebuilt man pages, check that
+# For builds with allowed installation of prebuild man pages, check that
 # they exist in sources (make would pull them automatically as a fallback
 # from failed lookup in build products). For builds that require rebuild
 # of man pages, abort with error if build product is missing.
@@ -983,6 +978,11 @@ DOCBUILD_BEGIN = { \
     && ! test -w "${builddir}/docbook-xsl.css" \
     ; then chmod u+w "${builddir}/docbook-xsl.css" ; fi ; \
     chmod -R u+w "./$${A2X_OUTDIR}" || true ; \
+    if test x"$(srcdir)" != x"$(builddir)" ; then \
+        if ! test -s "$(builddir)/$<" && test -s "$(srcdir)/`basename $<`" ; then \
+            ln -fs "$(srcdir)/`basename $<`" "$(builddir)/" ; \
+        fi ; \
+    fi ; \
     A2X_VERBOSE="$(ASCIIDOC_VERBOSE)"; if [ "$(V)" = 1 ]; then A2X_VERBOSE="--verbose"; fi; \
 }
 
@@ -1002,14 +1002,6 @@ DOCBUILD_END = { \
     fi ; \
 }
 
-### Call the prep step consistently to create symlinks (out-of-tree)
-### or just touch-files for peace of mind (in-tree builds). Then we
-### use these path names (truncated "-prepped") now surely located
-### in the builddir as the sources for rendered docs.
-*.txt-prepped: $(abs_top_builddir)/docs/man/.prep-src-docs
-
-#.txt.txt-prepped: $(abs_top_builddir)/docs/man/.prep-src-docs
-
 ### Regarding absolute paths in attributes below: by default asciidoc
 ### resolves include paths relative to the main document, so while we
 ### see the relative builddir as "." in the makefile, for included
@@ -1017,7 +1009,7 @@ DOCBUILD_END = { \
 ### Note: `(top_)srcdir` and `(top_)builddir` must end with a path
 ### separator, or be empty -- so in all cases letting the resulting
 ### string resolve meaningfully in the filesystem during docs build.
-.txt-prepped.html:
+.txt.html:
 	@A2X_OUTDIR="tmp/man-html.$(@F).$$$$" ; \
 	 echo "  DOC-MAN-HTML Generating $@"; \
 	 $(DOCBUILD_BEGIN) ; RES=0; \
@@ -1029,7 +1021,7 @@ DOCBUILD_END = { \
 		--attribute builddir="$(abs_builddir)/" \
 		--attribute top_srcdir="$(abs_top_srcdir)/" \
 		--attribute top_builddir="$(abs_top_builddir)/" \
-		-o "$${A2X_OUTDIR}/$(@F)" "$(<D)/`basename "$(<F)" -prepped`" || RES=$$? ; \
+		-o "$${A2X_OUTDIR}/$(@F)" $< || RES=$$? ; \
 	 $(DOCBUILD_END) ; exit $$RES
 
 ### Prior to Asciidoc ~8.6.8, the --destination-dir flag didn't seem to affect the location of the intermediate .xml file.
@@ -1045,32 +1037,32 @@ A2X_MANPAGE_OPTS = --doctype manpage --format manpage $${A2X_VERBOSE} \
 	--attribute top_builddir="$(abs_top_builddir)/" \
 	--destination-dir="$${A2X_OUTDIR}"
 
-.txt-prepped.1:
+.txt.1:
 	@A2X_OUTDIR="tmp/man1.$(@F).$$$$" ; \
 	 echo "  DOC-MAN  Generating $@"; \
 	 $(DOCBUILD_BEGIN) ; RES=0; \
-	 $(A2X) $(A2X_MANPAGE_OPTS) "$(<D)/`basename "$(<F)" -prepped`" || RES=$$? ; \
+	 $(A2X) $(A2X_MANPAGE_OPTS) $< || RES=$$? ; \
 	 $(DOCBUILD_END) ; exit $$RES
 
-.txt-prepped.3:
+.txt.3:
 	@A2X_OUTDIR="tmp/man3.$(@F).$$$$" ; \
 	 echo "  DOC-MAN  Generating $@"; \
 	 $(DOCBUILD_BEGIN) ; RES=0; \
-	 $(A2X) $(A2X_MANPAGE_OPTS) "$(<D)/`basename "$(<F)" -prepped`" || RES=$$? ; \
+	 $(A2X) $(A2X_MANPAGE_OPTS) $< || RES=$$? ; \
 	 $(DOCBUILD_END) ; exit $$RES
 
-.txt-prepped.5:
+.txt.5:
 	@A2X_OUTDIR="tmp/man5.$(@F).$$$$" ; \
 	 echo "  DOC-MAN  Generating $@"; \
 	 $(DOCBUILD_BEGIN) ; RES=0; \
-	 $(A2X) $(A2X_MANPAGE_OPTS) "$(<D)/`basename "$(<F)" -prepped`" || RES=$$? ; \
+	 $(A2X) $(A2X_MANPAGE_OPTS) $< || RES=$$? ; \
 	 $(DOCBUILD_END) ; exit $$RES
 
-.txt-prepped.8:
+.txt.8:
 	@A2X_OUTDIR="tmp/man8.$(@F).$$$$" ; \
 	 echo "  DOC-MAN  Generating $@"; \
 	 $(DOCBUILD_BEGIN) ; RES=0; \
-	 $(A2X) $(A2X_MANPAGE_OPTS) "$(<D)/`basename "$(<F)" -prepped`" || RES=$$? ; \
+	 $(A2X) $(A2X_MANPAGE_OPTS) $< || RES=$$? ; \
 	 $(DOCBUILD_END) ; exit $$RES
 
 else !HAVE_ASCIIDOC
@@ -1122,103 +1114,20 @@ else !HAVE_ASCIIDOC
 
 endif !HAVE_ASCIIDOC
 
-# NOTE: Due to portability, we do not use a GNU percent-wildcard extension.
-# We also have to export some variables that may be tainted by relative
-# paths when parsing the other makefile (e.g. MKDIR_P that may be defined
-# via expanded $(top_builddir)/install-sh):
+# NOTE: Due to portability, we do not use a GNU percent-wildcard extension:
 #%-spellchecked: % Makefile.am $(top_srcdir)/docs/Makefile.am $(abs_srcdir)/$(NUT_SPELL_DICT)
-#	+$(MAKE) -s -f $(top_builddir)/docs/Makefile $(AM_MAKEFLAGS) MKDIR_P="$(MKDIR_P)" builddir="$(builddir)" srcdir="$(srcdir)" top_builddir="$(top_builddir)" top_srcdir="$(top_srcdir)" SPELLCHECK_SRC_ONE="$<" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
+#	$(MAKE) -s -f $(top_builddir)/docs/Makefile SPELLCHECK_SRC_ONE="$<" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
 
 # NOTE: Portable suffix rules do not allow prerequisites, so we shim them here
 # by a wildcard target in case the make implementation can put the two together.
 *.txt-spellchecked: Makefile.am $(abs_top_srcdir)/docs/Makefile.am $(abs_srcdir)/$(NUT_SPELL_DICT)
 .txt.txt-spellchecked:
-	+$(MAKE) -s -f $(top_builddir)/docs/Makefile $(AM_MAKEFLAGS) MKDIR_P="$(MKDIR_P)" builddir="$(builddir)" srcdir="$(srcdir)" top_builddir="$(top_builddir)" top_srcdir="$(top_srcdir)" SPELLCHECK_SRC_ONE="$<" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
+	$(MAKE) -s -f $(top_builddir)/docs/Makefile SPELLCHECK_SRC_ONE="$<" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
 
 spellcheck spellcheck-interactive spellcheck-sortdict:
-	+$(MAKE) -f $(top_builddir)/docs/Makefile $(AM_MAKEFLAGS) MKDIR_P="$(MKDIR_P)" builddir="$(builddir)" srcdir="$(srcdir)" top_builddir="$(top_builddir)" top_srcdir="$(top_srcdir)" SPELLCHECK_SRC="$(SRC_ALL_PAGES)" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
-
-# When building out-of-tree, be sure to have all asciidoc resources
-# under the same dir structure (tool limitation)
-# NOTE: Not including *all* of EXTRA_DIST here, because we also "dist"
-# the built man pages in the tarball for end-users without an asciidoc
-# stack (causing a dependency loop)!
-PREP_SRC = $(LINKMAN_INCLUDE_GENERATED) $(SRC_ALL_PAGES) asciidoc.conf
-
-# NOTE: Some "make" implementations prefix a relative or absent path to
-# the filenames in PREP_SRC, others (e.g. Sun make) prepend the absolute
-# path to locate the sources, so we end up with bogus trees under docs/.
-# Code below tries to detect and truncate this mess, including possible
-# source texts located in/under parent dirs.
-$(abs_top_builddir)/docs/man/.prep-src-docs: $(PREP_SRC)
-	@cd "$(@D)" || exit ; \
-	 linkroot="$(abs_builddir)" ; \
-	 if test x"$(abs_srcdir)" = x"$(abs_builddir)" ; then \
-	    COUNT=0; \
-	    for F in $(PREP_SRC) ; do \
-	        case "$$F" in \
-	            /*) F="`echo "$$F" | sed "s#^$(abs_top_srcdir)/*#./#"`"; \
-	                if test x"$${linkroot}" = x"$(abs_builddir)" ; then \
-	                    linkroot="$(abs_top_builddir)" ; \
-	                    cd "$(abs_top_builddir)" ; \
-	                fi ;; \
-	        esac ; \
-	        if ! test -e "$${F}-prepped" ; then \
-	            touch "$${F}-prepped" || exit ; \
-	            COUNT="`expr $$COUNT + 1`" ; \
-	        fi ; \
-	    done ; \
-	 else \
-	    COUNT=30 ; \
-	    touch "$@.$$$$" ; \
-	    while test -e "$@.working" -a "$$COUNT" -gt 0 ; do sleep 1; COUNT="`expr $$COUNT - 1`"; done ; \
-	    touch "$@.working" ; \
-	    if test -n "`find "$@" -newer "$@.$$$$" 2>/dev/null`" ; then \
-	        rm -f "$@.$$$$" "$@.working" ; \
-	        exit 0; \
-	    fi ; \
-	    rm -f "$@.$$$$" ; \
-	    COUNT=0; \
-	    linksrcroot="$(abs_srcdir)" ; \
-	    for F in `echo $(PREP_SRC) | tr ' ' '\n' | sort -n | uniq` ; do \
-	        case "$$F" in \
-	            /*) F="`echo "$$F" | sed "s#^$(abs_top_srcdir)/*#./#"`"; \
-	                if test x"$${linkroot}" = x"$(abs_builddir)" ; then \
-	                    linkroot="$(abs_top_builddir)" ; \
-	                    linksrcroot="$(abs_top_srcdir)" ; \
-	                    cd "$(abs_top_builddir)" ; \
-	                fi ;; \
-	            "$(srcdir)"/*) F="`echo "$$F" | sed 's#^$(srcdir)/*#./#'`" ;; \
-	        esac ; \
-	        D="`dirname "$$F"`" ; \
-	        $(MKDIR_P) "$${linkroot}/$$D" || { rm -f "$@.working" ; exit 1 ; } ; \
-	        if ! test -e "$${linkroot}/$$F" && test -s "$${linksrcroot}/$$F" ; then \
-	            echo "  LN     '$${linksrcroot}/$$F' => '$${linkroot}/$$F' (PWD = '`pwd`')" >&2 ; \
-	            ln -fs "$${linksrcroot}/$$F" "$${linkroot}/$$F" || { rm -f "$@.working" ; exit 1 ; } ; \
-	            COUNT="`expr $$COUNT + 1`" ; \
-	        fi ; \
-	        if ! test -e "$${linkroot}/$${F}-prepped" ; then \
-	            touch "$${linkroot}/$${F}-prepped" || { rm -f "$@.working" ; exit 1 ; } ; \
-	            COUNT="`expr $$COUNT + 1`" ; \
-	        fi ; \
-	    done ; \
-	 fi ; \
-	 if test "$$COUNT" -gt 0 -o ! -e "$@" ; then touch "$@" ; fi
-	@rm -f "$@.working"
+	$(MAKE) -f $(top_builddir)/docs/Makefile SPELLCHECK_SRC="$(SRC_ALL_PAGES)" SPELLCHECK_SRCDIR="$(srcdir)" SPELLCHECK_BUILDDIR="$(builddir)" $@
 
 MAINTAINERCLEANFILES = Makefile.in .dirstamp
 
 clean-local:
 	$(AM_V_at)rm -rf tmp
-	$(AM_V_at)for F in $(PREP_SRC) ; do \
-	        case "$$F" in \
-	            /*) F="`echo "$$F" | sed "s#^$(abs_top_srcdir)/*#./#"`"; cd "$(abs_top_builddir)" ;; \
-	        esac ; \
-	        if test x"$(abs_srcdir)" != x"$(abs_builddir)" ; then \
-	            if test -L "$$F" || test -h "$$F" ; then \
-	                rm -f "$$F" ; \
-	            fi ; \
-	        fi ; \
-	        rm -f "$${F}-prepped" ; \
-	    done ; \
-	    rm -f "$(abs_top_builddir)/docs/man/.prep-src-docs"*

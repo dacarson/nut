@@ -1,0 +1,139 @@
+UPSPlus(8)
+==========
+
+NAME
+----
+
+UPSPlus - driver for UPS on the UPSPlus HAT (EP-0136)
+
+SYNOPSIS
+--------
+
+*upsplus* -h
+
+* upsplus* -a 'UPS_NAME' ['OPTIONS']
+
+NOTE: This man page only documents the hardware-specific features of the
+* upsplus* driver.  For information about the core driver, see
+linkman:nutupsdrv[8].
+
+
+SUPPORTED HARDWARE
+------------------
+
+The *upsplus* driver supports the portable UPSPlus HAT UPS (EP-0136) for Raspberry Pi
+embedded PCs.
+
+Tested with UPSPlus HAT, Firmware: 10
+
+EXTRA ARGUMENTS
+---------------
+
+The required parameter for this driver is the I2C bus name:
+
+*port*='dev-node'::
+On the UPSPlus HAT, this should be `/dev/i2c-1`.
+
+This driver supports the following optional settings in the
+linkman:ups.conf[5] file:
+
+Other supported parameters are:
+*sampleperiod*='value'::
+Specify how often the hardware should sample the battery state in minutes. Acceptable values
+are in the range of 1-1440
+
+From the command line the following flags can be set:
+*factoryreset*::
+If this flag is present it will reset the unit back to factory defaults and then exit.
+
+*batteryreset*::
+If this flag is present it will reset the battery voltage min/max/low values to being automatically set, 
+and then exit.
+
+INSTANT COMMANDS
+--------
+This driver supports some extra commands (see linkman:upscmd[8]):
+
+*load.off.delay*::
+Shutdown in 10s. If ups.start.auto is enabled, then restart if power is connected.
+
+*shutdown.return*::
+Set ups.start.auto to yes, then shutdown in 10s. Restart if power is connected. 
+
+*shutdown.stayoff*::
+Set ups.start.auto to no, then shutdown in 10s. Do not restart even if power is connected. 
+
+*shutdown.stop*::
+Stop all shutdown or reboot operations.
+
+*shutdown.reboot.graceful*::
+Shutdown in 5s, wait 5 seconds, then restart.
+
+VARIABLES
+---------
+
+This driver supports the following variables (see linkman:upsrw[8]).
+
+*battery.voltage.high*::
+writable: Override the automatic detection of the full battery voltage level in V (2.75-4.5)
+
+*battery.voltage.low*::
+writable: Override the automatic detection of the empty battery voltage level in V (2.75-4.5)
+
+*battery.charge.low*::
+writable: remaining battery charge percentage for low battery warning in % (0-100)
+
+*ups.timer.reboot*::
+writable: Start the UPS reboot timer in sec (10-255)
+
+*ups.timer.shutdown*::
+writable: Start the UPS shutdown timer in sec (10-255)
+
+*ups.start.auto*::
+writable: Restart when power is connected (yes/no)
+
+INSTALLATION
+------------
+
+This driver is specific to the Linux I2C API, and requires the lm_sensors
+libi2c-dev or its equivalent to compile.
+
+As the driver may run as a user with no privileges, make sure that the device node is
+readable by everyone. This may require `sudo chmod a+rw /dev/i2c-1`
+
+//////////////////////////////////////////
+Optional: use DIAGNOSTICS to describe troubleshooting techniques that are
+longer than what can be conveniently described in the driver error messages.
+
+DIAGNOSTICS
+-----------
+If you get the error:
+	Failed to open the i2c bus on /dev/i2c-1: Permission denied
+Make sure that the dev is readable by your nut username and group. 
+
+//////////////////////////////////////////
+
+KNOWN ISSUES AND BUGS
+---------------------
+
+
+
+AUTHORS
+-------
+
+David Carson <dacarson@gmail.com>
+
+SEE ALSO
+--------
+
+The core driver:
+~~~~~~~~~~~~~~~~
+
+linkman:nutupsdrv[8]
+
+Internet resources:
+~~~~~~~~~~~~~~~~~~~
+
+* Product home page: https://wiki.52pi.com/index.php/EP-0136
+
+* The NUT (Network UPS Tools) home page: https://www.networkupstools.org/
