@@ -98,8 +98,8 @@ INSTALLATION
 This driver is specific to the Linux I2C API, and requires the lm_sensors
 libi2c-dev or its equivalent to compile.
 
-As the driver may run as a user with no privileges, make sure that the device node is
-readable by everyone. This may require `sudo chmod a+rw /dev/i2c-1`
+Make sure that the user is a member of the i2c group so that it can access 
+/dev/i2c-1 bus. If the user is 'nut' then run 'sudo adduser nut i2c'
 
 //////////////////////////////////////////
 Optional: use DIAGNOSTICS to describe troubleshooting techniques that are
@@ -109,7 +109,7 @@ DIAGNOSTICS
 -----------
 If you get the error:
 	Failed to open the i2c bus on /dev/i2c-1: Permission denied
-Make sure that the dev is readable by your nut username and group. 
+Make sure that the username the driver is running as is a member of the i2c group. 
 
 //////////////////////////////////////////
 
