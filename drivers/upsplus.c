@@ -194,7 +194,8 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define USBC_POWER_CONNECTED                0x1
 #define MICROUSB_POWER_CONNECTED            0x2
 
-#define USB_LEVEL_THRESHOLD                 4000
+#define USB_VOLTAGE_MINIMUM                 4000
+#define USB_VOLTAGE_MAXIMIM                 13500
 #define CHARGE_CURRENT_THRESHOLD            0.20
 #define USBC_NOMINAL_VOLTAGE                9.00
 #define MICROUSB_NOMINAL_VOLTAGE            5.00
@@ -202,6 +203,8 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define MAX_BATTERY_VOLTAGE                 4500
 #define MIN_SAMPLE_PERIOD                   1
 #define MAX_SAMPLE_PERIOD                   1440
+#define MIN_BATTERY_TEMPERATURE             -20
+#define MAX_BATTERY_TEMPERATURE             65 /* Note: the forced temperature protection cannot be turned off, threshold: 65 degrees! */
 #define MAX_LOAD                            22.5/* (5V x 4.5A) */
 #define MAX_PEAK_LOAD                       40.0/* (5V x 8A) */
 #define AUTO_SHUTDOWN_TIME                  240
@@ -502,8 +505,13 @@ static void get_battery_temperature(void)
 
     I2C_READ_WORD(upsfd, cmd, __func__)
     
-	upsdebugx(1, "Battery Temperature: %d°C", data);
-    dstate_setinfo("battery.temperature", "%d", data);
+    upsdebugx(1, "Battery Temperature: %d°C", data);
+    if (data >=  MIN_BATTERY_TEMPERATURE &&
+            data <= MAX_BATTERY_TEMPERATURE) {
+        dstate_setinfo("battery.temperature", "%d", data);
+    } else {
+        upsdebugx(2, "Battery Temperature out of range, skipping", data);
+    }
 }
 
 static void get_battery_voltage(void)
@@ -796,7 +804,8 @@ static int set_power_off_timer(const char *value)
     upsdebugx(3, __func__);
 
     if (str_to_short(value, &data, 10) && data >= 10) {
-        i2c_smbus_write_byte_data(upsfd, cmd, data);
+        reset_shutdown_restart_timers();
+        I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
         upsdebugx(1, "Shutdown Timer: %ds", data);
         dstate_setinfo("ups.timer.shutdown", "%d", data);
         automatic_shutdown = 0;
@@ -828,7 +837,8 @@ static int set_reboot_timer(const char *value)
     upsdebugx(3, __func__);
 
     if (str_to_short(value, &data, 10) && data >= 10) {
-        i2c_smbus_write_byte_data(upsfd, cmd, data);
+        reset_shutdown_restart_timers();
+        I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
         upsdebugx(1, "Reboot Timer: %ds", data);
         dstate_setinfo("ups.timer.reboot", "%d", data);
         return STAT_SET_HANDLED;
@@ -863,11 +873,11 @@ static int set_ups_auto_restart(const char *value)
     upsdebugx(3, __func__);
 
     if (!strcasecmp(value, "yes")) {
-        i2c_smbus_write_byte_data(upsfd, cmd, 0x1);
+        I2C_WRITE_BYTE(upsfd, cmd, 0x1, __func__)
         dstate_setinfo("ups.start.auto", "yes");
         return STAT_SET_HANDLED;
     } else if (!strcasecmp(value, "no")) {
-        i2c_smbus_write_byte_data(upsfd, cmd, 0x0);
+        I2C_WRITE_BYTE(upsfd, cmd, 0x0, __func__)
         dstate_setinfo("ups.start.auto", "no");
         return STAT_SET_HANDLED;
     }
@@ -894,16 +904,26 @@ static void check_operating_state(void)
     get_UsbC_Voltage();
     get_MicroUsb_Voltage();
 
-    if (usbC_power > USB_LEVEL_THRESHOLD) {
+    if (usbC_power > USB_VOLTAGE_MINIMUM) {
         power_state = USBC_POWER_CONNECTED;
-        upsdebugx(1, "Input Voltage: %0.3fV", usbC_power / 1000.0);
-        dstate_setinfo("input.voltage.nominal", "%0.3f", USBC_NOMINAL_VOLTAGE);
-        dstate_setinfo("input.voltage", "%0.3f", usbC_power / 1000.0);
-    } else if (microUsb_power > USB_LEVEL_THRESHOLD) {
+        upsdebugx(1, "USB-C Input Voltage: %0.3fV", usbC_power / 1000.0);
+        /* Skip bad readings */
+        if (usbC_power <= USB_VOLTAGE_MAXIMUM) {
+            dstate_setinfo("input.voltage.nominal", "%0.3f", USBC_NOMINAL_VOLTAGE);
+            dstate_setinfo("input.voltage", "%0.3f", usbC_power / 1000.0);
+        } else {
+            upsdebugx(2, "Input Voltage out of range, skipping.");
+        }
+    } else if (microUsb_power > USB_VOLTAGE_MINIMUM) {
         power_state = MICROUSB_POWER_CONNECTED;
-        upsdebugx(1, "Input Voltage: %0.3fV", microUsb_power / 1000.0);
-        dstate_setinfo("input.voltage.nominal", "%0.3f", MICROUSB_NOMINAL_VOLTAGE);
-        dstate_setinfo("input.voltage", "%0.3f", microUsb_power / 1000.0);
+        upsdebugx(1, "MicroUSB Input Voltage: %0.3fV", microUsb_power / 1000.0);
+        /* Skip bad readings */
+        if (microUsb_power <= USB_VOLTAGE_MAXIMUM) {
+            dstate_setinfo("input.voltage.nominal", "%0.3f", MICROUSB_NOMINAL_VOLTAGE);
+            dstate_setinfo("input.voltage", "%0.3f", microUsb_power / 1000.0);
+        } else {
+            upsdebugx(2, "Input Voltage out of range, skipping.");
+        }
     } else {
         power_state = POWER_NOT_CONNECTED;
         upsdebugx(1, "Input Voltage: None");
@@ -918,14 +938,14 @@ static void check_operating_state(void)
 
 /* If we have power, and we are shutting down and we started the automatic shutdown, then stop it */
     if (power_state != POWER_NOT_CONNECTED && automatic_shutdown == 1) {
-        i2c_smbus_write_byte_data(upsfd, SHUTDOWN_TIMER_CMD, 0);
+        I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
         automatic_shutdown = 0;
         upsdebugx(1, "Power connected, cancelled shutdown timer");
     }
 
 /* If we don't have power, and we are not shutting down, then start the automatic shutdown. */
     if (power_state == POWER_NOT_CONNECTED && automatic_shutdown != 1 && battery_voltage < battery_low) {
-        i2c_smbus_write_byte_data(upsfd, SHUTDOWN_TIMER_CMD, AUTO_SHUTDOWN_TIME);
+        I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, AUTO_SHUTDOWN_TIME, __func__)
         automatic_shutdown = 1;
         upsdebugx(1, "Low battery, starting shutdown timer for %d", AUTO_SHUTDOWN_TIME);
     }
@@ -933,20 +953,31 @@ static void check_operating_state(void)
 /* Otherwise leave the current state because we could have started shutdown and the user stopped it. */
 }
 
-static void reset_factory()
+static void reset_shutdown_restart_timers(void)
+{
+    I2C_WRITE_BYTE(upsfd, RESTART_TIMER_CMD, 0x0, __func__)
+    I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
+}
+
+static void reset_factory(void)
 {
     uint8_t cmd = RESET_TO_DEFAULT_CMD;
 
     I2C_WRITE_BYTE(upsfd, cmd, 0x1, __func__)
 }
 
-static void reset_battery()
+static void reset_battery(void)
 {
     uint8_t cmd = RESET_TO_DEFAULT_CMD;
 
     I2C_WRITE_BYTE(upsfd, cmd, 0x0, __func__)
 }
 
+/*
+  Always reset timers back to zero before trying to set them. Others
+  have reported issues with setting a timer that is already running with
+  a value other than zero.
+*/
 int upsplus_setvar(const char *key, const char *value)
 {
     upsdebugx(2, "In %s for %s with %s...", __func__, key, value);
@@ -978,34 +1009,42 @@ int upsplus_setvar(const char *key, const char *value)
     return STAT_SET_UNKNOWN;
 }
 
+/*
+  Always reset timers back to zero before trying to set them. Others
+  have reported issues with setting a timer that is already running with
+  a value other than zero.
+*/
 int upsplus_instcmd(const char *cmd, const char *reserved)
 {
     upsdebugx(2, "In %s with %s and extra %s.", __func__, cmd, reserved);
 
     if (!strcasecmp(cmd, "load.off.delay")) {
+        reset_shutdown_restart_timers();
         set_power_off_timer("10");
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.return")) {
+        reset_shutdown_restart_timers();
         set_ups_auto_restart("yes");
         set_power_off_timer("10");
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.stayoff")) {
+        reset_shutdown_restart_timers();
         set_ups_auto_restart("no");
         set_power_off_timer("10");
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.stop")) {
-        i2c_smbus_write_byte_data(upsfd, RESTART_TIMER_CMD, 0x0);
-        i2c_smbus_write_byte_data(upsfd, SHUTDOWN_TIMER_CMD, 0x0);
+        reset_shutdown_restart_timers();
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.reboot.graceful")) {
+        reset_shutdown_restart_timers();
         set_reboot_timer("10");
         return STAT_INSTCMD_HANDLED;
     }
@@ -1067,7 +1106,7 @@ void upsdrv_initinfo(void)
 /* For the sake of coherence, shutdown commands will set ups.start.auto to the right value before issuing the command. */
     dstate_addcmd("shutdown.return");/* Shutdown countdown (10) +  Auto Power up ON */
     dstate_addcmd("shutdown.stayoff");/* Shutdown countdown (10) +  Auto Power up OFF */
-    dstate_addcmd("shutdown.stop");/* // Shutdown countdown = 0 + Reboot countdown = 0 */
+    dstate_addcmd("shutdown.stop");/* Shutdown countdown = 0 + Reboot countdown = 0 */
     dstate_addcmd("shutdown.reboot.graceful");/* Restart countdown (10) */
 }
 
