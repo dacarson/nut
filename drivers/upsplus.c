@@ -156,22 +156,36 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define MCU_VOLTAGE_CMD                     0x01
 #define OUTPUT_VOLTAGE_CMD                  0x03
 #define BATTERY_VOLTAGE_CMD                 0x05
+
 #define USBC_VOLTAGE_CMD                    0x07
 #define MICROUSB_VOLTAGE_CMD                0x09
+#define USB_VOLTAGE_MINIMUM                 4000
+#define USB_VOLTAGE_MAXIMUM                 13500
 
 #define BATTERY_TEMPERATURE_CMD             0x0B
+#define BATTERY_TEMPERATURE_MINIMUM         -20
+#define BATTERY_TEMPERATURE_MAXIMUM         65
+/* Note: the forced temperature protection cannot be turned off, threshold: 65 degrees! */
 
 #define BATTERY_FULL_CMD                    0x0D
 #define BATTERY_EMPTY_CMD                   0x0F
 #define BATTERY_LOW_CMD                     0x11
+#define MIN_BATTERY_VOLTAGE                 2750/* Lower will kill the battery. */
+#define MAX_BATTERY_VOLTAGE                 4500
+
 #define CHARGE_LEVEL_CMD                    0x13
 
 #define BATTERY_SAMPLE_PERIOD_CMD           0x15
+#define BATTERY_SAMPLE_PERIOD_MINIMUM       1
+#define BATTERY_SAMPLE_PERIOD_MAXIMUM       1440
 
 #define POWER_STATUS_CMD                    0x17
 
 #define SHUTDOWN_TIMER_CMD                  0x18
+
 #define WAKEUP_ON_CHARGE_CMD                0x19
+#define WAKEUP_ON_CHARGE_DISABLE            0x0
+#define WAKEUP_ON_CHARGE_ENABLE             0x1
 
 #define RESTART_TIMER_CMD                   0x1A
 #define RESET_TO_DEFAULT_CMD                0x1B
@@ -182,7 +196,9 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 
 #define FIRMWARE_VERSION_CMD                0x28
 
-#define BATTERY_PARAM_SET_BY_USER_CMD       0x2A
+#define BATTERY_PARAM_CUSTOM_CMD            0x2A
+#define BATTERY_PARAM_CUSTOM_DISABLE        0x0
+#define BATTERY_PARAM_CUSTOM_ENABLE         0x1
 
 #define SERIAL_NUMBER_CMD                   0xF0
 
@@ -194,19 +210,13 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define USBC_POWER_CONNECTED                0x1
 #define MICROUSB_POWER_CONNECTED            0x2
 
-#define USB_VOLTAGE_MINIMUM                 4000
-#define USB_VOLTAGE_MAXIMIM                 13500
 #define CHARGE_CURRENT_THRESHOLD            0.20
 #define USBC_NOMINAL_VOLTAGE                9.00
 #define MICROUSB_NOMINAL_VOLTAGE            5.00
-#define MIN_BATTERY_VOLTAGE                 2750/* Lower will kill the battery. */
-#define MAX_BATTERY_VOLTAGE                 4500
-#define MIN_SAMPLE_PERIOD                   1
-#define MAX_SAMPLE_PERIOD                   1440
-#define MIN_BATTERY_TEMPERATURE             -20
-#define MAX_BATTERY_TEMPERATURE             65 /* Note: the forced temperature protection cannot be turned off, threshold: 65 degrees! */
+
 #define MAX_LOAD                            22.5/* (5V x 4.5A) */
 #define MAX_PEAK_LOAD                       40.0/* (5V x 8A) */
+#define TIMER_MINIMUM                       10
 #define AUTO_SHUTDOWN_TIME                  240
 
 #define DRIVER_NAME                         "UPSPlus driver"
@@ -506,11 +516,11 @@ static void get_battery_temperature(void)
     I2C_READ_WORD(upsfd, cmd, __func__)
     
     upsdebugx(1, "Battery Temperature: %d°C", data);
-    if (data >=  MIN_BATTERY_TEMPERATURE &&
-            data <= MAX_BATTERY_TEMPERATURE) {
+    if (data >=  BATTERY_TEMPERATURE_MINIMUM &&
+            data <= BATTERY_TEMPERATURE_MAXIMUM) {
         dstate_setinfo("battery.temperature", "%d", data);
     } else {
-        upsdebugx(2, "Battery Temperature out of range, skipping", data);
+        upsdebugx(2, "Battery Temperature out of range, skipping");
     }
 }
 
@@ -654,7 +664,7 @@ static void get_charge_low(void)
 
 }
 
-static int set_charge_low(const char *value)
+static void set_charge_low(int16_t percent)
 {
 /* Calculate the low percentage as this UPS only has a low voltage */
     uint8_t cmd = BATTERY_LOW_CMD;
@@ -663,21 +673,17 @@ static int set_charge_low(const char *value)
     upsdebugx(3, __func__);
 
 /* Calculate a new low voltage based on percent */
-    int percent;
-    if (str_to_int(value, &percent, 10) && percent >= 0 && percent <= 100) {
-        data = ((battery_full - battery_empty) * percent) / 100 + battery_empty;
+	data = ((battery_full - battery_empty) * percent) / 100 + battery_empty;
 
-        i2c_smbus_write_byte_data(upsfd, BATTERY_PARAM_SET_BY_USER_CMD, 0x1);
-        i2c_smbus_write_byte_data(upsfd, cmd, data & 0xFF);
-        i2c_smbus_write_byte_data(upsfd, cmd + 1, (data >> 8) & 0xFF);
-        upsdebugx(1, "Low Charge Threshold: %0.3f%%", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
-        dstate_setinfo("battery.charge.low", "%0.3f", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
-        battery_low = data;
-        return STAT_SET_HANDLED;
-    }
+    I2C_WRITE_BYTE(upsfd, BATTERY_PARAM_CUSTOM_CMD,
+        WAKEUP_ON_CHARGE_ENABLE, __func__)
+    I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
+    I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
+        
+    upsdebugx(1, "Low Charge Threshold: %0.3f%%", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
+    dstate_setinfo("battery.charge.low", "%0.3f", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
+    battery_low = data;
 
-    upsdebugx(1, "Unknown value for battery.charge.low: %s", value);
-    return STAT_SET_UNKNOWN;
 }
 
 static void get_battery_full(void)
@@ -694,29 +700,19 @@ static void get_battery_full(void)
     dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
 }
 
-static int set_battery_full(const char *value)
+static void set_battery_full(uint16_t data)
 {
     uint8_t cmd = BATTERY_FULL_CMD;
-    int16_t data;
 
     upsdebugx(3, __func__);
 
-    double voltage;
-    if (str_to_double(value, &voltage, 10)) {
-        data = voltage * 1000;
-        if (data >= MIN_BATTERY_VOLTAGE && data <= MAX_BATTERY_VOLTAGE) {
-            i2c_smbus_write_byte_data(upsfd, BATTERY_PARAM_SET_BY_USER_CMD, 0x1);
-            i2c_smbus_write_byte_data(upsfd, cmd, data & 0xFF);
-            i2c_smbus_write_byte_data(upsfd, cmd + 1, (data >> 8) & 0xFF);
-            upsdebugx(1, "Battery Voltage High: %0.3fV", data / 1000.0);
-            dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
-            battery_full = data;
-            return STAT_SET_HANDLED;
-        }
-    }
-
-    upsdebugx(1, "Unknown value for battery.voltage.high: %s", value);
-    return STAT_SET_UNKNOWN;
+	I2C_WRITE_BYTE(upsfd, BATTERY_PARAM_CUSTOM_CMD,
+        BATTERY_PARAM_CUSTOM_ENABLE, __func__)
+	I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
+	I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
+	
+	upsdebugx(1, "Battery Voltage High: %0.3fV", data / 1000.0);
+	dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
 }
 
 static void get_battery_nominal(void)
@@ -758,29 +754,26 @@ static void get_battery_empty(void)
     dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
 }
 
-static int set_battery_empty(const char *value)
+static void set_battery_empty(uint16_t data)
 {
     uint8_t cmd = BATTERY_EMPTY_CMD;
-    int16_t data;
 
     upsdebugx(3, __func__);
 
-    double voltage;
-    if (str_to_double(value, &voltage, 10)) {
-        data = voltage * 1000;
-        if (data >= MIN_BATTERY_VOLTAGE && data <= MAX_BATTERY_VOLTAGE) {
-            i2c_smbus_write_byte_data(upsfd, BATTERY_PARAM_SET_BY_USER_CMD, 0x1);
-            i2c_smbus_write_byte_data(upsfd, cmd, data & 0xFF);
-            i2c_smbus_write_byte_data(upsfd, cmd + 1, (data >> 8) & 0xFF);
-            upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
-            dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
-            battery_empty = data;
-            return STAT_SET_HANDLED;
-        }
-    }
+    I2C_WRITE_BYTE(upsfd, BATTERY_PARAM_CUSTOM_CMD,
+        BATTERY_PARAM_CUSTOM_ENABLE, __func__)
+    I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
+    I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
 
-    upsdebugx(1, "Unknown value for battery.voltage.low: %s", value);
-    return STAT_SET_UNKNOWN;
+    upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
+    dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
+    battery_empty = data;
+}
+
+static void reset_shutdown_restart_timers(void)
+{
+    I2C_WRITE_BYTE(upsfd, RESTART_TIMER_CMD, 0x0, __func__)
+    I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
 }
 
 static void get_power_off_timer(void)
@@ -796,24 +789,18 @@ static void get_power_off_timer(void)
     dstate_setinfo("ups.timer.shutdown", "%d", data);
 }
 
-static int set_power_off_timer(const char *value)
+static void set_power_off_timer(const short data)
 {
     uint8_t cmd = SHUTDOWN_TIMER_CMD;
-    short data;
 
     upsdebugx(3, __func__);
 
-    if (str_to_short(value, &data, 10) && data >= 10) {
-        reset_shutdown_restart_timers();
-        I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
-        upsdebugx(1, "Shutdown Timer: %ds", data);
-        dstate_setinfo("ups.timer.shutdown", "%d", data);
-        automatic_shutdown = 0;
-        return STAT_SET_HANDLED;
-    }
+	reset_shutdown_restart_timers();
+	I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
 
-    upsdebugx(1, "Unknown value for ups.timer.shutdown: %s", value);
-    return STAT_SET_UNKNOWN;
+	upsdebugx(1, "Set Shutdown Timer: %ds", data);
+	dstate_setinfo("ups.timer.shutdown", "%d", data);
+	automatic_shutdown = 0;
 }
 
 static void get_reboot_timer(void)
@@ -829,23 +816,17 @@ static void get_reboot_timer(void)
     dstate_setinfo("ups.timer.reboot", "%d", data);
 }
 
-static int set_reboot_timer(const char *value)
+static void set_reboot_timer(const short data)
 {
     uint8_t cmd = RESTART_TIMER_CMD;
-    short data;
 
     upsdebugx(3, __func__);
 
-    if (str_to_short(value, &data, 10) && data >= 10) {
-        reset_shutdown_restart_timers();
-        I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
-        upsdebugx(1, "Reboot Timer: %ds", data);
-        dstate_setinfo("ups.timer.reboot", "%d", data);
-        return STAT_SET_HANDLED;
-    }
+    reset_shutdown_restart_timers();
+    I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
 
-    upsdebugx(1, "Unknown value for ups.timer.reboot: %s", value);
-    return STAT_SET_UNKNOWN;
+    upsdebugx(1, "Set Reboot Timer: %ds", data);
+    dstate_setinfo("ups.timer.reboot", "%d", data);
 }
 
 static void get_ups_auto_restart(void)
@@ -857,7 +838,7 @@ static void get_ups_auto_restart(void)
 
     I2C_READ_BYTE(upsfd, cmd, __func__)
 
-    if (data == 1) {
+    if (data == WAKEUP_ON_CHARGE_ENABLE) {
         upsdebugx(1, "Auto restart on external power: yes");
         dstate_setinfo("ups.start.auto", "%s", "yes");
     } else {
@@ -866,24 +847,19 @@ static void get_ups_auto_restart(void)
     }
 }
 
-static int set_ups_auto_restart(const char *value)
+static void set_ups_auto_restart(const short data)
 {
     uint8_t cmd = WAKEUP_ON_CHARGE_CMD;
 
     upsdebugx(3, __func__);
+    
+    I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
 
-    if (!strcasecmp(value, "yes")) {
-        I2C_WRITE_BYTE(upsfd, cmd, 0x1, __func__)
+    if (data == WAKEUP_ON_CHARGE_ENABLE) {
         dstate_setinfo("ups.start.auto", "yes");
-        return STAT_SET_HANDLED;
-    } else if (!strcasecmp(value, "no")) {
-        I2C_WRITE_BYTE(upsfd, cmd, 0x0, __func__)
+    } else {
         dstate_setinfo("ups.start.auto", "no");
-        return STAT_SET_HANDLED;
     }
-
-    upsdebugx(1, "Unknown value for ups.start.auto: %s", value);
-    return STAT_SET_UNKNOWN;
 }
 
 static void get_ups_uptime(void)
@@ -927,7 +903,7 @@ static void check_operating_state(void)
     } else {
         power_state = POWER_NOT_CONNECTED;
         upsdebugx(1, "Input Voltage: None");
-        dstate_setinfo("input.voltage", "%0.3f", 0.0);
+        dstate_setinfo("input.voltage", "0.0");
     }
 
 /*
@@ -953,12 +929,6 @@ static void check_operating_state(void)
 /* Otherwise leave the current state because we could have started shutdown and the user stopped it. */
 }
 
-static void reset_shutdown_restart_timers(void)
-{
-    I2C_WRITE_BYTE(upsfd, RESTART_TIMER_CMD, 0x0, __func__)
-    I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
-}
-
 static void reset_factory(void)
 {
     uint8_t cmd = RESET_TO_DEFAULT_CMD;
@@ -968,9 +938,9 @@ static void reset_factory(void)
 
 static void reset_battery(void)
 {
-    uint8_t cmd = RESET_TO_DEFAULT_CMD;
+    uint8_t cmd = BATTERY_PARAM_CUSTOM_CMD;
 
-    I2C_WRITE_BYTE(upsfd, cmd, 0x0, __func__)
+    I2C_WRITE_BYTE(upsfd, cmd, BATTERY_PARAM_CUSTOM_DISABLE, __func__)
 }
 
 /*
@@ -980,30 +950,73 @@ static void reset_battery(void)
 */
 int upsplus_setvar(const char *key, const char *value)
 {
+    short data;
+    double voltage;
+    int percent;
+    
     upsdebugx(2, "In %s for %s with %s...", __func__, key, value);
 
     if (!strcasecmp(key, "battery.voltage.high")) {
-        return set_battery_full(value);
+        if (str_to_double(value, &voltage, 10)) {
+            if (voltage * 1000 >= MIN_BATTERY_VOLTAGE
+                    && voltage * 1000 <= MAX_BATTERY_VOLTAGE) {
+                set_battery_full(voltage * 1000);
+                return STAT_SET_HANDLED;
+            }
+        }
+        upsdebugx(1, "Unknown value for battery.voltage.high: %s", value);
+        return STAT_SET_UNKNOWN;
     }
 
     if (!strcasecmp(key, "battery.voltage.low")) {
-        return set_battery_empty(value);
+        if (str_to_double(value, &voltage, 10)) {
+            if (voltage * 1000 >= MIN_BATTERY_VOLTAGE
+                    && voltage * 1000 <= MAX_BATTERY_VOLTAGE) {
+                set_battery_empty(voltage * 1000);
+                return STAT_SET_HANDLED;
+            }
+        }
+        upsdebugx(1, "Unknown value for battery.voltage.low: %s", value);
+        return STAT_SET_UNKNOWN;
     }
 
     if (!strcasecmp(key, "battery.charge.low")) {
-        return set_charge_low(value);
+        if (str_to_int(value, &percent, 10) && percent >= 0 && percent <= 100) {
+            set_charge_low(percent);
+			return STAT_SET_HANDLED;
+        }
+        upsdebugx(1, "Unknown value for battery.charge.low: %s", value);
+        return STAT_SET_UNKNOWN;
     }
 
     if (!strcasecmp(key, "ups.timer.shutdown")) {
-        return set_power_off_timer(value);
+        if (str_to_short(value, &data, 10) && data >= TIMER_MINIMUM) {
+            set_power_off_timer(data);
+            return STAT_SET_HANDLED;
+        }
+        upsdebugx(1, "Unknown value for ups.timer.shutdown: %s", value);
+        return STAT_SET_UNKNOWN;
     }
 
     if (!strcasecmp(key, "ups.timer.reboot")) {
-        return set_reboot_timer(value);
+		if (str_to_short(value, &data, 10) && data >= TIMER_MINIMUM) {
+            set_reboot_timer(data);
+            return STAT_SET_HANDLED;
+		}
+        return STAT_SET_UNKNOWN;
     }
 
     if (!strcasecmp(key, "ups.start.auto")) {
-        return set_ups_auto_restart(value);
+        if (!strcasecmp(value, "yes")) {
+            set_ups_auto_restart(WAKEUP_ON_CHARGE_ENABLE);
+            return STAT_SET_HANDLED;
+        } else if (!strcasecmp(value, "no")) {
+            set_ups_auto_restart(WAKEUP_ON_CHARGE_DISABLE);
+            return STAT_SET_HANDLED;
+        }
+
+        upsdebugx(1, "Unknown value for ups.start.auto: %s", value);
+        return STAT_SET_UNKNOWN;
     }
 
     return STAT_SET_UNKNOWN;
@@ -1019,22 +1032,19 @@ int upsplus_instcmd(const char *cmd, const char *reserved)
     upsdebugx(2, "In %s with %s and extra %s.", __func__, cmd, reserved);
 
     if (!strcasecmp(cmd, "load.off.delay")) {
-        reset_shutdown_restart_timers();
-        set_power_off_timer("10");
+        set_power_off_timer(TIMER_MINIMUM);
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.return")) {
-        reset_shutdown_restart_timers();
-        set_ups_auto_restart("yes");
-        set_power_off_timer("10");
+        set_ups_auto_restart(WAKEUP_ON_CHARGE_ENABLE);
+        set_power_off_timer(TIMER_MINIMUM);
         return STAT_INSTCMD_HANDLED;
     }
 
     if (!strcasecmp(cmd, "shutdown.stayoff")) {
-        reset_shutdown_restart_timers();
-        set_ups_auto_restart("no");
-        set_power_off_timer("10");
+        set_ups_auto_restart(WAKEUP_ON_CHARGE_DISABLE);
+        set_power_off_timer(TIMER_MINIMUM);
         return STAT_INSTCMD_HANDLED;
     }
 
@@ -1044,8 +1054,7 @@ int upsplus_instcmd(const char *cmd, const char *reserved)
     }
 
     if (!strcasecmp(cmd, "shutdown.reboot.graceful")) {
-        reset_shutdown_restart_timers();
-        set_reboot_timer("10");
+        set_reboot_timer(TIMER_MINIMUM);
         return STAT_INSTCMD_HANDLED;
     }
 
@@ -1140,8 +1149,8 @@ void upsdrv_updateinfo(void)
 
 void upsdrv_shutdown(void)
 {
-    set_ups_auto_restart("no");
-    set_power_off_timer("10");
+    set_ups_auto_restart(WAKEUP_ON_CHARGE_DISABLE);
+    set_power_off_timer(TIMER_MINIMUM);
 }
 
 void upsdrv_help(void)
@@ -1184,7 +1193,7 @@ void upsdrv_initups(void)
 
     if (getval("sampleperiod") != NULL) {
         int sampleperiod;
-        if (str_to_int(getval("sampleperiod"), &sampleperiod, 10) && sampleperiod >= MIN_SAMPLE_PERIOD && sampleperiod <= MAX_SAMPLE_PERIOD) {
+        if (str_to_int(getval("sampleperiod"), &sampleperiod, 10) && sampleperiod >= BATTERY_SAMPLE_PERIOD_MINIMUM && sampleperiod <= BATTERY_SAMPLE_PERIOD_MAXIMUM) {
             i2c_smbus_write_byte_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD, sampleperiod & 0xFF);
             i2c_smbus_write_byte_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD + 1, (sampleperiod >> 8) & 0xFF);
             upsdebugx(1, "Updated sample period to: %d", sampleperiod);
