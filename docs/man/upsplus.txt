@@ -22,7 +22,9 @@ SUPPORTED HARDWARE
 ------------------
 
 The *upsplus* driver supports the portable UPSPlus HAT UPS (EP-0136) for Raspberry Pi
-embedded PCs.
+embedded PCs. The hardware only supports a 'Protected Voltage' aka low voltage and
+not a battery.charge.low percent. so there may be rounding errors when you get/set 
+battery.charge.low values.
 
 Tested with UPSPlus HAT, Firmware: 10
 
