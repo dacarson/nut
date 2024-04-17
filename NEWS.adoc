@@ -40,6 +40,47 @@ https://github.com/networkupstools/nut/milestone/11
  - (expected) Bug fixes for fallout possible due to "fightwarn" effort in 2.8.0
 
 
+ - drivers, upsd, upsmon: reduce "scary noise" about failure to `fopen()`
+   the PID file (which most of the time means that no previous instance of
+   the daemon was running to potentially conflict with), especially useless
+   since in recent NUT releases the verdicts from `sendsignal*()` methods
+   are analyzed and lead to layman worded situation reports in these programs.
+   [issue #1782, PR #2384]
+
+ - drivers started with the `-FF` command-line option (e.g. wrapped into the
+   systemd units to stay "foregrounded" *and* save a PID file anyway) should
+   now also handle an existing PID file to interact with the earlier instance
+   of the driver program, if still running (e.g. started manually). [#2384]
+
+ - Extended instant commands for driver reloading with a `driver.exit`
+   command for a protocol equivalent of sending a `SIGTERM`, e.g. when
+   a newer instance of the driver program tries to start. [#1903, #2392]
+
+ - riello_ser updates:
+   * added `localcalculation` option to compute `battery.runtime` and
+     `battery.charge` if the device provides bogus values [issue #2390,
+     following in the footsteps of #1692, #1685 done for `riello_usb`]
+     (similar to `runtimecal` in some other drivers, may be refactored
+     to that configuration and logic model in later NUT releases)
+
+ - added Visench C1K (using serial port converter with USB ID `1a86:7523`)
+   as known supported by `nutdrv_qx` (Megatec protocol) since at least
+   NUT v2.7.4 release [#2395]
+
+ - USB drivers could log `(nut_)libusb_get_string: Success` due to either
+   reading an empty string or getting a success code `0` from libusb.
+   This difference should now be better logged, and not into syslog. [#2399]
+
+ - upsmon:
+   * it was realized that the `POWERDOWNFLAG` must be explicitly set in the
+     configuration file, there is no built-in default in the binary program
+     (the settings facilitated by the `configure` script during build "only"
+     impact the `upsmon.conf.sample`, init-scripts and similar files generated
+     from templates). [issue #321, PR #2383]
+   * added an `OBLBDURATION` (seconds) setting to optionally delay raising
+     the alarm for immediate shutdown in critical situation. [#321]
+
+
 Release notes for NUT 2.8.2 - what's new since 2.8.1
 ----------------------------------------------------
 
@@ -1461,6 +1502,8 @@ NOTE: There was no public NUT 2.7.0 release.
  - usbhid-ups: final fix for APC Back UPS ES.  APC Back UPS ES devices have
    buggy firmware, and this version does not cause a regression. The max_report
    variable should be set automatically based on the USB identification values.
+   * UPDATE: known as `maxreport` flag for `usbhid-ups` driver, and as a
+     `max_report_size` setting in code, as of NUT v2.8.2 release.
 
  - nut-scanner: fix crash
 

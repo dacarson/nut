@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3484 utf-8
+personal_ws-1.1 en 3491 utf-8
 AAC
 AAS
 ABI
@@ -866,6 +866,7 @@ OC
 ODH
 OEM
 OEM'ed
+OBLBDURATION
 OFFDURATION
 OID
 OIDs
@@ -1459,6 +1460,7 @@ Viewpower
 Viewsonic
 Viktor
 VirCIO
+Visench
 Vout
 Vultech
 Václav
@@ -1563,6 +1565,7 @@ adkorte
 adm
 admin's
 adminbox
+admonitionblock
 adoc
 advorder
 ae
@@ -2067,6 +2070,7 @@ fc
 fcb
 fcntl
 fd
+fdX
 fds
 fe
 featureReport
@@ -2091,6 +2095,7 @@ fmt
 fno
 fontconfig
 footnoteref
+fopen
 forceshutdown
 forcessl
 formatconfig
@@ -2599,6 +2604,7 @@ nanosleep
 nashkaminski
 natively
 nb
+nbproject
 nbr
 nbsp
 nd
@@ -2988,6 +2994,7 @@ selftest
 sendback
 sendline
 sendmail
+sendsignal
 sequentialized
 ser
 seria
