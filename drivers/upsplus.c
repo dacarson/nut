@@ -685,6 +685,8 @@ static void get_realtime_output_state(void)
   
   if (attempt == 0) {
     upsdebugx(1, "INA219 Output Voltage value not ready");
+    close(extrafd);
+    extrafd = 0;
     return;
   }
   
@@ -727,6 +729,8 @@ static void get_realtime_battery_state(void)
   
   if (attempt == 0) {
     upsdebugx(1, "INA219 Battery Voltage value not ready");
+    close(extrafd);
+    extrafd = 0;
     return;
   }
   
