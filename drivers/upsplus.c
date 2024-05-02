@@ -606,13 +606,17 @@ static void get_status(void)
   
   get_charge_low();
   get_battery_full();
-  if (battery_voltage == 0) {
+  
+  /* If we are discharging while power is connected, the
+   * batteries are bad.
+   */
+  if (battery_voltage == 0 || (battery_current < 0 && power_state != POWER_NOT_CONNECTED)) {
     upsdebugx(1, "Battery Status: Replace");
     status_set("RB");
   } else if (battery_voltage < battery_low) {
     upsdebugx(1, "Battery Status: Low");
     status_set("LB");
-  } else if (battery_voltage > (1.1 * battery_full)) {
+  } else if (battery_voltage > (1.2 * battery_full)) {
     upsdebugx(1, "Battery Status: High");
     status_set("HB");
   }
@@ -1125,6 +1129,12 @@ void upsdrv_initinfo(void)
   dstate_setinfo("battery.packs", "%d", 2);
   /* 18650 lithium battery are Li-ion */
   dstate_setinfo("battery.type", "%s", "Li-ion");
+  
+  /* Specs say:
+  Linear compensation range discharge capacity: 5V 4.5A. (Nominal)
+  */
+  dstate_setinfo("output.voltage.nominal", "5.0");
+  dstate_setinfo("output.current.nominal", "4.5");
   
   /* Attempt to detect the UPSPlus by reading the firmware */
   /* version. */
