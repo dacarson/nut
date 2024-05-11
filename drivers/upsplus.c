@@ -157,7 +157,10 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define OUTPUT_VOLTAGE_CMD                  0x03
 #define OUTPUT_VOLTAGE_MINIMUM              0
 #define OUTPUT_VOLTAGE_MAXIMUM              5500
+
 #define BATTERY_VOLTAGE_CMD                 0x05
+#define BATTERY_VOLTAGE_MINIMUM             0
+#define BATTERY_VOLTAGE_MAXIMUM             4500
 
 #define USBC_VOLTAGE_CMD                    0x07
 #define MICROUSB_VOLTAGE_CMD                0x09
@@ -299,6 +302,14 @@ static uint16_t battery_voltage = 0;
 static float battery_current = 0;
 
 /*
+ * If the battery is draining while power is connected
+ * multiple times, then it is bad. If it is just a
+ * once off, then it is just reading the battery charge
+ * level.
+ */
+static int bad_battery_count = 0;
+
+/*
  * Smooth out i2c read errors by holding the most recent
  * battery charge level reading
  */
@@ -419,7 +430,11 @@ static void get_charge_level(void)
   battery_charge_level = data;
   
   upsdebugx(1, "Battery Charge Level: %d%%", data);
-  dstate_setinfo("battery.charge", "%d", data);
+  if (data < 110) {
+    dstate_setinfo("battery.charge", "%d", data);
+  } else {
+    upsdebugx(2, "Battery Charge Level out of range, skipping");
+  }
 }
 
 static void get_output_voltage(void)
@@ -452,7 +467,11 @@ static void get_battery_full(void)
   }
   
   upsdebugx(1, "Battery Voltage High: %0.3fV", data / 1000.0);
-  dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
+  if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
+  } else {
+    upsdebugx(2, "Battery Voltage High out of range, skipping");
+  }
 }
 
 static void set_battery_full(uint16_t data)
@@ -485,7 +504,11 @@ static void get_battery_empty(void)
   }
   
   upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
-  dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
+  if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
+  } else {
+    upsdebugx(2, "Battery Voltage Low out of range, skipping");
+  }
 }
 
 static void set_battery_empty(uint16_t data)
@@ -607,10 +630,7 @@ static void get_status(void)
   get_charge_low();
   get_battery_full();
   
-  /* If we are discharging while power is connected, the
-   * batteries are bad.
-   */
-  if (battery_voltage == 0 || (battery_current < 0 && power_state != POWER_NOT_CONNECTED)) {
+  if (battery_voltage == 0 || bad_battery_count > 1) {
     upsdebugx(1, "Battery Status: Replace");
     status_set("RB");
   } else if (battery_voltage < battery_low) {
@@ -619,6 +639,18 @@ static void get_status(void)
   } else if (battery_voltage > (1.2 * battery_full)) {
     upsdebugx(1, "Battery Status: High");
     status_set("HB");
+  }
+  
+  /* If we are discharging while power is connected for
+   * two times in a row, then batteries are bad.
+   * Need to check for multiple times discharging
+   * because when the unit samples the battery level
+   * it discharges for a moment.
+   */
+  if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
+    bad_battery_count ++;
+  } else {
+    bad_battery_count = 0;
   }
   
   if (battery_current > CHARGE_CURRENT_THRESHOLD) {
@@ -666,7 +698,11 @@ static void get_battery_voltage(void)
   battery_voltage = data;
   
   upsdebugx(1, "Battery Voltage: %0.3fV", data / 1000.0);
-  dstate_setinfo("battery.voltage", "%0.3f", data / 1000.0);
+  if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("battery.voltage", "%0.3f", data / 1000.0);
+  } else {
+    upsdebugx(2, "Battery Voltage out of range, skipping");
+  }
 }
 
 static void get_realtime_output_state(void)
@@ -697,7 +733,11 @@ static void get_realtime_output_state(void)
   data >>= 3;    /* Bits 3-15 */
   data *= 4;    /* LSB 4mV */
   upsdebugx(1, "INA219 Output Voltage: %0.3fV", data / 1000.0);
-  dstate_setinfo("output.voltage", "%0.3f", data / 1000.0);
+  if (data > OUTPUT_VOLTAGE_MINIMUM || data < OUTPUT_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("output.voltage", "%0.3f", data / 1000.0);
+  } else {
+    upsdebugx(2, "Output voltage out of range, skipping");
+  }
   
   I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Output Power: %0.3fW", data * OUTPUT_POWER_LSB_MAGIC);
@@ -715,7 +755,7 @@ static void get_realtime_output_state(void)
 
 static void get_realtime_battery_state(void)
 {
-  uint16_t data = 0;
+  int16_t data = 0;
   
   extrafd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
   
@@ -741,7 +781,11 @@ static void get_realtime_battery_state(void)
   data >>= 3;    /* Bits 3-15 */
   data *= 4;    /* LSB 4mV */
   upsdebugx(1, "INA219 Battery Voltage: %0.3fV", data / 1000.0);
-  dstate_setinfo("battery.voltage", "%0.3f", data / 1000.0);
+  if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("battery.voltage", "%0.3f", data / 1000.0);
+  } else {
+    upsdebugx(2, "INA219 Battery Voltage out of range, skipping");
+  }
   
   I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Battery Power: %0.3fW", data * BATTERY_POWER_LSB_MAGIC);
