@@ -782,6 +782,7 @@ static void get_realtime_battery_state(void)
   data *= 4;    /* LSB 4mV */
   upsdebugx(1, "INA219 Battery Voltage: %0.3fV", data / 1000.0);
   if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    battery_voltage = data;
     dstate_setinfo("battery.voltage", "%0.3f", data / 1000.0);
   } else {
     upsdebugx(2, "INA219 Battery Voltage out of range, skipping");
