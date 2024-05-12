@@ -307,7 +307,7 @@ static float battery_current = 0;
  * once off, then it is just reading the battery charge
  * level.
  */
-static int bad_battery_count = 0;
+static time_t bad_battery_timer = 0;
 
 /*
  * Smooth out i2c read errors by holding the most recent
@@ -605,6 +605,7 @@ static void get_status(void)
 {
   uint8_t cmd = POWER_STATUS_CMD, data;
   char status_buf[ST_MAX_VALUE_LEN];
+  time_t now;
   
   upsdebugx(3, __func__);
   
@@ -629,9 +630,10 @@ static void get_status(void)
   
   get_charge_low();
   get_battery_full();
-  
-  /* bad_battery_count threshold found by trial and error */
-  if (battery_voltage == 0 || bad_battery_count > 30) {
+
+  /* Check for 60secs of discharging on power */
+  time(&now);
+  if (battery_voltage == 0 || (bad_battery_timer && now - bad_battery_timer > 60)) {
     upsdebugx(1, "Battery Status: Replace");
     status_set("RB");
   } else if (battery_voltage < battery_low) {
@@ -642,16 +644,18 @@ static void get_status(void)
     status_set("HB");
   }
   
-  /* If we are discharging while power is connected for
-   * multiple times in a row, then batteries are bad.
+    /* If we are discharging while power is connected for
+   * 1 minute, then batteries are bad.
    * Need to check for multiple times discharging
-   * because when the ups circuitry samples the battery
+   * because when the UPS circuitry samples the battery
    * level it discharges for a moment.
    */
   if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
-    bad_battery_count ++;
+    if (!bad_battery_timer) {
+      time(&bad_battery_timer);
+    }
   } else {
-    bad_battery_count = 0;
+    bad_battery_timer = 0;
   }
   
   if (battery_current > CHARGE_CURRENT_THRESHOLD) {
