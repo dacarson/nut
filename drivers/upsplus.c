@@ -630,7 +630,8 @@ static void get_status(void)
   get_charge_low();
   get_battery_full();
   
-  if (battery_voltage == 0 || bad_battery_count > 1) {
+  /* bad_battery_count threshold found by trial and error */
+  if (battery_voltage == 0 || bad_battery_count > 30) {
     upsdebugx(1, "Battery Status: Replace");
     status_set("RB");
   } else if (battery_voltage < battery_low) {
@@ -642,10 +643,10 @@ static void get_status(void)
   }
   
   /* If we are discharging while power is connected for
-   * two times in a row, then batteries are bad.
+   * multiple times in a row, then batteries are bad.
    * Need to check for multiple times discharging
-   * because when the unit samples the battery level
-   * it discharges for a moment.
+   * because when the ups circuitry samples the battery
+   * level it discharges for a moment.
    */
   if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
     bad_battery_count ++;
