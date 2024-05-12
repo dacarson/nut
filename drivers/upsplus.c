@@ -746,6 +746,9 @@ static void get_realtime_output_state(void)
   
   I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Output Power: %0.3fW", data * OUTPUT_POWER_LSB_MAGIC);
+    // Apparent Power and Real Power are the same for this DC UPS
+  dstate_setinfo("ups.realpower", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
+  dstate_setinfo("ups.power", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
   upsdebugx(1, "UPS Load: %0.3f%%", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
   dstate_setinfo("ups.load", "%0.3f", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
   
@@ -1185,6 +1188,8 @@ void upsdrv_initinfo(void)
   */
   dstate_setinfo("output.voltage.nominal", "5.0");
   dstate_setinfo("output.current.nominal", "4.5");
+  dstate_setinfo("ups.realpower.nominal", "%f", MAX_LOAD);
+  dstate_setinfo("ups.power.nominal", "%f", MAX_LOAD);
   
   /* Attempt to detect the UPSPlus by reading the firmware */
   /* version. */
