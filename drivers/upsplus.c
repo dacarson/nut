@@ -616,9 +616,9 @@ static void get_status(void)
   I2C_READ_BYTE(upsfd, cmd, __func__)
   
   if (data == 1) {
-    upsdebugx(1, "Battery status: normal");
+    upsdebugx(1, "Power status: normal");
   } else {
-    upsdebugx(1, "Battery status: off");
+    upsdebugx(1, "Power status: off");
     status_set("OFF");
     /* If we are not running, then set no other Status. */
     return;
@@ -722,7 +722,7 @@ static void estimate_battery_runtime(float power_consumption)
   total_battery_capacity = (battery_full / 1000.0) * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
   remaining_energy = total_battery_capacity * battery_charge_level / 100.0;
   
-  upsdebugx(1, "Battery runtime: %dmin", (int)(remaining_energy * 60.0 * 60.0 / power_consumption));
+  upsdebugx(1, "Battery runtime: %ds", (int)(remaining_energy * 60.0 * 60.0 / power_consumption));
   dstate_setinfo("battery.runtime", "%d", (int)(remaining_energy * 60.0 * 60.0 / power_consumption));
   
   return ;
