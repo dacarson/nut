@@ -221,6 +221,8 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 
 #define MAX_LOAD                            22.5/* (5V x 4.5A) */
 #define MAX_PEAK_LOAD                       40.0/* (5V x 8A) */
+#define DEFAULT_BATTERY_CAPACITY_Ah         3.5
+#define BATTERY_CELL_COUNT                  2
 #define TIMER_MINIMUM                       10
 #define AUTO_SHUTDOWN_TIME                  240
 
@@ -282,7 +284,7 @@ static uint16_t firmware_version = 0;
 
 /*
  * These values don't change once set, so do
- * some caching.
+ * some caching. Values are in mV
  * -1 value means that it needs to be loaded from UPS
  */
 static int16_t battery_full = -1;
@@ -291,7 +293,7 @@ static int16_t battery_low = -1;
 static int8_t ups_auto_restart = -1;
 
 /* Current battery voltage is used in multiple
- calculations, so cache it temporarily
+ calculations, so cache it temporarily. mV
  */
 static uint16_t battery_voltage = 0;
 
@@ -710,6 +712,22 @@ static void get_battery_voltage(void)
   }
 }
 
+static void estimate_battery_runtime(float power_consumption)
+{
+  float total_battery_capacity;
+  float remaining_energy;
+  
+  get_battery_full();
+  
+  total_battery_capacity = (battery_full / 1000.0) * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
+  remaining_energy = total_battery_capacity * battery_charge_level / 100.0;
+  
+  upsdebugx(1, "Battery runtime: %dmin", (int)(remaining_energy * 60.0 * 60.0 / power_consumption));
+  dstate_setinfo("battery.runtime", "%d", (int)(remaining_energy * 60.0 * 60.0 / power_consumption));
+  
+  return ;
+}
+
 static void get_realtime_output_state(void)
 {
   uint16_t data;
@@ -751,6 +769,11 @@ static void get_realtime_output_state(void)
   dstate_setinfo("ups.power", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
   upsdebugx(1, "UPS Load: %0.3f%%", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
   dstate_setinfo("ups.load", "%0.3f", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
+  
+  // If charging, estimate time based on output power
+  if (power_state != POWER_NOT_CONNECTED) {
+    estimate_battery_runtime(data * OUTPUT_POWER_LSB_MAGIC);
+  }
   
   I2C_READ_WORD_INA219(extrafd, INA219_CURRENT_CMD, __func__)
   /* Current is a signed 16bit number */
@@ -799,6 +822,11 @@ static void get_realtime_battery_state(void)
   I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Battery Power: %0.3fW", data * BATTERY_POWER_LSB_MAGIC);
   /* dstate_setinfo( "battery.power", "%0.3f", data * BATTERY_POWER_LSB_MAGIC ); */
+  
+  // If discharging, estimate time based on battery power
+  if (power_state == POWER_NOT_CONNECTED) {
+    estimate_battery_runtime(data * BATTERY_POWER_LSB_MAGIC);
+  }
   
   I2C_READ_WORD_INA219(extrafd, INA219_CURRENT_CMD, __func__)
   /* Current is a signed 16bit number */
@@ -1179,7 +1207,8 @@ void upsdrv_initinfo(void)
   dstate_setinfo("device.type", "%s", "ups");
   dstate_setinfo("device.model", "%s", "EP-0136");
   
-  dstate_setinfo("battery.packs", "%d", 2);
+  dstate_setinfo("battery.packs", "%d", BATTERY_CELL_COUNT);
+  dstate_setinfo("battery.capacity", "%f", DEFAULT_BATTERY_CAPACITY_Ah);
   /* 18650 lithium battery are Li-ion */
   dstate_setinfo("battery.type", "%s", "Li-ion");
   
