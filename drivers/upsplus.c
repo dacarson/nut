@@ -174,7 +174,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 
 #define BATTERY_FULL_CMD                    0x0D
 #define BATTERY_EMPTY_CMD                   0x0F
-#define BATTERY_LOW_CMD                     0x11
+#define BATTERY_PROTECTION_CMD              0x11/* UPS will FSD when this is hit */
 #define MIN_BATTERY_VOLTAGE                 2750/* Lower will kill the battery. */
 #define MAX_BATTERY_VOLTAGE                 4500
 
@@ -225,6 +225,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_CELL_COUNT                  2
 #define TIMER_MINIMUM                       10
 #define AUTO_SHUTDOWN_TIME                  240
+#define DEFAULT_CHARGE_LOW                  10.0
 
 #define DRIVER_NAME                         "UPSPlus driver"
 #define DRIVER_VERSION                      "1.0"
@@ -288,7 +289,6 @@ static uint16_t firmware_version = 0;
  * -1 value means that it needs to be loaded from UPS
  */
 static int16_t battery_full = -1;
-static int16_t battery_empty = -1;
 static int16_t battery_low = -1;
 static int8_t ups_auto_restart = -1;
 
@@ -316,6 +316,12 @@ static time_t bad_battery_timer = 0;
  * battery charge level reading
  */
 static float battery_charge_level = 0;
+
+/*
+ * Battery percentage for when to switch to LB, and
+ * start automatic shutdown
+ */
+static float battery_charge_low = DEFAULT_CHARGE_LOW;
 
 /*
  * Keep track of if the driver started the shutdown
@@ -493,16 +499,16 @@ static void set_battery_full(uint16_t data)
   dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
 }
 
-static void get_battery_empty(void)
+static void get_battery_low(void)
 {
-  uint8_t cmd = BATTERY_EMPTY_CMD;
-  int16_t data = battery_empty;
+  uint8_t cmd = BATTERY_PROTECTION_CMD;
+  int16_t data = battery_low;
   
   upsdebugx(3, __func__);
   
-  if (battery_empty < 0) {
+  if (battery_low < 0) {
     I2C_READ_WORD(upsfd, cmd, __func__)
-    battery_empty = data;
+    battery_low = data;
   }
   
   upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
@@ -524,55 +530,44 @@ static void set_battery_empty(uint16_t data)
   I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
   I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
   
-  battery_empty = -1;
-  
-  upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
-  dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
+  upsdebugx(1, "Battery Voltage Empty: %0.3fV", data / 1000.0);
+  //dstate_setinfo("battery.voltage.empty", "%0.3f", data / 1000.0);
 }
 
-static void get_charge_low(void)
+static void set_battery_low(uint16_t data)
 {
-  /* Calculate the low percentage as this UPS only has a low voltage */
-  uint8_t cmd = BATTERY_LOW_CMD;
-  int16_t data = battery_low;
+  uint8_t cmd = BATTERY_PROTECTION_CMD;
   
   upsdebugx(3, __func__);
-  
-  if (battery_low < 0) {
-    I2C_READ_WORD(upsfd, cmd, __func__)
-    battery_low = data;
-  }
-  
-  get_battery_empty();
-  get_battery_full();
-  
-  upsdebugx(1, "Low Charge Threshold: %0.3f%%", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
-  dstate_setinfo("battery.charge.low", "%0.3f", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
-  
-}
-
-static void set_charge_low(int16_t percent)
-{
-  /* Calculate the low percentage as this UPS only has a low voltage */
-  uint8_t cmd = BATTERY_LOW_CMD;
-  int16_t data;
-  
-  upsdebugx(3, __func__);
-  
-  /* Calculate a new low voltage based on percent */
-  get_battery_empty();
-  get_battery_full();
-  data = ((battery_full - battery_empty) * percent) / 100 + battery_empty;
   
   I2C_WRITE_BYTE(upsfd, BATTERY_PARAM_CUSTOM_CMD,
-                 WAKEUP_ON_CHARGE_ENABLE, __func__)
+                 BATTERY_PARAM_CUSTOM_ENABLE, __func__)
   I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
   I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
   
   battery_low = -1;
   
-  upsdebugx(1, "Low Charge Threshold: %0.3f%%", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
-  dstate_setinfo("battery.charge.low", "%0.3f", 100.0 * (data - battery_empty) / (battery_full - battery_empty));
+  upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
+  dstate_setinfo("battery.voltage.low", "%0.3f", data / 1000.0);
+  
+  /* Set the Empty voltage to be the same as the low/FSD voltage */
+  set_battery_empty(data);
+}
+
+
+static void get_charge_low(void)
+{
+  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
+  dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
+  
+}
+
+static void set_charge_low(int16_t percent)
+{
+  if (percent >= 0 || percent <= 100) {
+    battery_charge_low = percent;
+  }
+  get_charge_low();
 }
 
 static void get_UsbC_Voltage(void)
@@ -630,7 +625,7 @@ static void get_status(void)
     status_set("OL");
   }
   
-  get_charge_low();
+  get_battery_low();
   get_battery_full();
 
   /* Check for 60secs of discharging on power */
@@ -638,7 +633,7 @@ static void get_status(void)
   if (battery_voltage == 0 || (bad_battery_timer && now - bad_battery_timer > 60)) {
     upsdebugx(1, "Battery Status: Replace");
     status_set("RB");
-  } else if (battery_voltage < battery_low) {
+  } else if (battery_charge_level < battery_charge_low) {
     upsdebugx(1, "Battery Status: Low");
     status_set("LB");
   } else if (battery_voltage > (1.2 * battery_full)) {
@@ -1048,15 +1043,14 @@ static void check_operating_state(void)
   if (power_state != POWER_NOT_CONNECTED && automatic_shutdown == 1) {
     I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
     automatic_shutdown = 0;
-    upsdebugx(1, "Power connected, cancelled shutdown timer");
+    upsdebugx(0, "Power connected, cancelled shutdown timer");
   }
   
   /* If we don't have power, and we are not shutting down, then start the automatic shutdown. */
-  get_charge_low();
-  if (power_state == POWER_NOT_CONNECTED && automatic_shutdown != 1 && battery_voltage < battery_low) {
+  if (power_state == POWER_NOT_CONNECTED && automatic_shutdown != 1 && battery_charge_level < battery_charge_low) {
     I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, AUTO_SHUTDOWN_TIME, __func__)
     automatic_shutdown = 1;
-    upsdebugx(1, "Low battery, starting shutdown timer for %d", AUTO_SHUTDOWN_TIME);
+    upsdebugx(0, "Low battery, starting shutdown timer for %d", AUTO_SHUTDOWN_TIME);
   }
   
   /* Otherwise leave the current state because we could have started shutdown and the user stopped it. */
@@ -1105,7 +1099,7 @@ int upsplus_setvar(const char *key, const char *value)
     if (str_to_double(value, &voltage, 10)) {
       if (voltage * 1000 >= MIN_BATTERY_VOLTAGE
           && voltage * 1000 <= MAX_BATTERY_VOLTAGE) {
-        set_battery_empty(voltage * 1000);
+        set_battery_low(voltage * 1000);
         return STAT_SET_HANDLED;
       }
     }
@@ -1264,7 +1258,7 @@ void upsdrv_initinfo(void)
 void upsdrv_updateinfo(void)
 {
   get_battery_full();
-  get_battery_empty();
+  get_battery_low();
   get_charge_low();
   get_battery_nominal();
   
