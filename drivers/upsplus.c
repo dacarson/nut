@@ -205,6 +205,16 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_PARAM_CUSTOM_DISABLE        0x0
 #define BATTERY_PARAM_CUSTOM_ENABLE         0x1
 
+/* 0x2B - 0xEF are reserved, and don't seem to be used.
+ * When new commands are added in FW updates, they are
+ * added as the next available register. So to store
+ * custom data, start at highest reserved register
+ * and work back.
+ */
+ #define RESERVED_BATTERY_LOW_CHARGE_CMD    0xEF
+ #define BATTERY_LOW_CHARGE_CONFIGURED      0x80
+ #define BATTERY_LOW_CHARGE_MASK            0x7F
+
 #define SERIAL_NUMBER_CMD                   0xF0
 
 /*
@@ -557,17 +567,43 @@ static void set_battery_low(uint16_t data)
 
 static void get_charge_low(void)
 {
-  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
-  dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
+  uint8_t cmd = RESERVED_BATTERY_LOW_CHARGE_CMD;
+  uint16_t data = battery_charge_low;
   
+  upsdebugx(3, __func__);
+  
+  I2C_READ_WORD(upsfd, cmd, __func__)
+  if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
+    battery_charge_low = (data & BATTERY_LOW_CHARGE_MASK);
+    upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
+  }
+  
+  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
+  if (data <= 100) {
+    dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
+  } else {
+    upsdebugx(2, "Low Charge Threshold out of range, skipping");
+  }
 }
 
-static void set_charge_low(int16_t percent)
+static void set_charge_low(int16_t data)
 {
-  if (percent >= 0 || percent <= 100) {
-    battery_charge_low = percent;
+  uint8_t cmd = RESERVED_BATTERY_LOW_CHARGE_CMD;
+  
+  upsdebugx(3, __func__);
+  
+  if (data < 0 || data > 100) {
+    return;
   }
-  get_charge_low();
+  
+  battery_charge_low = data;
+  
+  data |= BATTERY_LOW_CHARGE_CONFIGURED;
+  
+  I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
+
+  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
+  dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
 }
 
 static void get_UsbC_Voltage(void)
