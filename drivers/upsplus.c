@@ -234,8 +234,9 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_BATTERY_CAPACITY_Ah         3.5
 #define BATTERY_CELL_COUNT                  2
 #define TIMER_MINIMUM                       10
+#define SHUTDOWN_TIMER                      20
 #define AUTO_SHUTDOWN_TIME                  240
-#define DEFAULT_CHARGE_LOW                  10.0
+#define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
 #define DRIVER_VERSION                      "1.0"
@@ -331,14 +332,7 @@ static float battery_charge_level = 0;
  * Battery percentage for when to switch to LB, and
  * start automatic shutdown
  */
-static float battery_charge_low = DEFAULT_CHARGE_LOW;
-
-/*
- * Keep track of if the driver started the shutdown
- * so that if power is re-connected, it will stop
- * the shutdown.
- */
-static uint8_t automatic_shutdown = 0;
+static uint8_t battery_charge_low = DEFAULT_CHARGE_LOW;
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -578,9 +572,9 @@ static void get_charge_low(void)
     upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
   }
   
-  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
-  if (data <= 100) {
-    dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
+  upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
+  if (battery_charge_low <= 100) {
+    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
   } else {
     upsdebugx(2, "Low Charge Threshold out of range, skipping");
   }
@@ -602,8 +596,8 @@ static void set_charge_low(int16_t data)
   
   I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
 
-  upsdebugx(1, "Low Charge Threshold: %0.3f%%", battery_charge_low);
-  dstate_setinfo("battery.charge.low", "%0.3f", battery_charge_low);
+  upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
+  dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
 }
 
 static void get_UsbC_Voltage(void)
@@ -960,7 +954,6 @@ static void set_power_off_timer(const short data)
   
   upsdebugx(1, "Set Shutdown Timer: %ds", data);
   dstate_setinfo("ups.timer.shutdown", "%d", data);
-  automatic_shutdown = 0;
 }
 
 static void get_reboot_timer(void)
@@ -1017,8 +1010,10 @@ static void set_ups_auto_restart(const short data)
   I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
   
   if (data == WAKEUP_ON_CHARGE_ENABLE) {
+    upsdebugx(1, "Set auto restart on external power: yes");
     dstate_setinfo("ups.start.auto", "yes");
   } else {
+    upsdebugx(1, "Set auto restart on external power: no");
     dstate_setinfo("ups.start.auto", "no");
   }
   
@@ -1068,33 +1063,13 @@ static void check_operating_state(void)
     upsdebugx(1, "Input Voltage: None");
     dstate_setinfo("input.voltage", "0.0");
   }
-  
-  /*
-   * The UPSPlus does not shut down by itself based on the Protection Voltage. The UPSPlus
-   * scripts manually check the current voltage and protection voltage and if the current
-   * voltage is less that protection, start a 4 minute shutdown timer. So do the same here.
-   */
-  
-  /* If we have power, and we are shutting down and we started the automatic shutdown, then stop it */
-  if (power_state != POWER_NOT_CONNECTED && automatic_shutdown == 1) {
-    I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
-    automatic_shutdown = 0;
-    upsdebugx(0, "Power connected, cancelled shutdown timer");
-  }
-  
-  /* If we don't have power, and we are not shutting down, then start the automatic shutdown. */
-  if (power_state == POWER_NOT_CONNECTED && automatic_shutdown != 1 && battery_charge_level < battery_charge_low) {
-    I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, AUTO_SHUTDOWN_TIME, __func__)
-    automatic_shutdown = 1;
-    upsdebugx(0, "Low battery, starting shutdown timer for %d", AUTO_SHUTDOWN_TIME);
-  }
-  
-  /* Otherwise leave the current state because we could have started shutdown and the user stopped it. */
 }
 
 static void reset_factory(void)
 {
   uint8_t cmd = RESET_TO_DEFAULT_CMD;
+  
+  upsdebugx(3, __func__);
   
   I2C_WRITE_BYTE(upsfd, cmd, 0x1, __func__)
 }
@@ -1102,6 +1077,8 @@ static void reset_factory(void)
 static void reset_battery(void)
 {
   uint8_t cmd = BATTERY_PARAM_CUSTOM_CMD;
+  
+  upsdebugx(3, __func__);
   
   I2C_WRITE_BYTE(upsfd, cmd, BATTERY_PARAM_CUSTOM_DISABLE, __func__)
 }
@@ -1321,8 +1298,10 @@ void upsdrv_updateinfo(void)
 
 void upsdrv_shutdown(void)
 {
+  upsdebugx(3, __func__);
+  
   set_ups_auto_restart(WAKEUP_ON_CHARGE_DISABLE);
-  set_power_off_timer(TIMER_MINIMUM);
+  set_power_off_timer(SHUTDOWN_TIMER);
 }
 
 void upsdrv_help(void)
