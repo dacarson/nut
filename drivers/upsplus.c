@@ -674,13 +674,15 @@ static void get_status(void)
     /* If we are discharging while power is connected for
    * 1 minute, then batteries are bad.
    * Need to check for multiple times discharging
-   * because when the UPS circuitry samples the battery
-   * level it discharges for a moment.
+   * because when the UPS circuitry calibrates, it samples
+   * the battery which drains it.
    */
   if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
     if (!bad_battery_timer) {
       time(&bad_battery_timer);
     }
+    upsdebugx(1, "Battery Status: Calibrating");
+    status_set("CAL");
   } else {
     bad_battery_timer = 0;
   }
@@ -926,6 +928,8 @@ static void get_battery_nominal(void)
 
 static void reset_shutdown_restart_timers(void)
 {
+  upsdebugx(3, __func__);
+  
   I2C_WRITE_BYTE(upsfd, RESTART_TIMER_CMD, 0x0, __func__)
   I2C_WRITE_BYTE(upsfd, SHUTDOWN_TIMER_CMD, 0x0, __func__)
 }
