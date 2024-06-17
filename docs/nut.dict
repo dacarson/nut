@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3132 utf-8
+personal_ws-1.1 en 3169 utf-8
 AAC
 AAS
 ABI
@@ -60,6 +60,7 @@ Antonino
 Apodaca
 AppData
 AppVeyor
+ArgumentList
 Arjen
 Arkadiusz
 Armin
@@ -153,6 +154,7 @@ CERTIDENT
 CERTREQUEST
 CERTVERIF
 CEST
+CHECKPROCNAME
 CHOST
 CHRG
 CL
@@ -373,6 +375,7 @@ Fideltronik
 Filipozzi
 Fiskars
 FlossMetrics
+Fontana
 Forza
 Fosshost
 Frama
@@ -452,6 +455,7 @@ HUPCL
 HV
 HVT
 HW
+HWMON
 Hajduch
 Hanno
 Harnhammar
@@ -609,6 +613,7 @@ LineB
 Lintian
 ListClients
 Lite's
+LocalIP
 LogMax
 LogMin
 LowBatt
@@ -857,6 +862,7 @@ PSSENTR
 PSUs
 PSW
 PSX
+PSZ
 PThreads
 PULS
 PV
@@ -904,6 +910,7 @@ PowerPS
 PowerPal
 PowerPanel
 PowerShare
+PowerShell
 PowerShield
 PowerSure
 PowerTech
@@ -921,6 +928,7 @@ PresentStatus
 Priv
 ProductID
 Progra
+ProgramFiles
 Proxmox
 Prynych
 Pulizzi
@@ -994,6 +1002,7 @@ Redhat
 Regados
 Reinholdtsen
 Remi
+RemoteIP
 Remoting
 Rene
 René
@@ -1011,6 +1020,7 @@ Rodríguez
 Rouben
 Rozman
 Rucelf
+RunAs
 RunUPSCommand
 RxD
 Ryabov
@@ -1244,6 +1254,7 @@ UPS's
 UPSCONN
 UPSDESC
 UPSHOST
+UPSIC
 UPSIMAGEPATH
 UPSLC
 UPSNOTIFY
@@ -1328,6 +1339,7 @@ WTU
 Waldie
 WantedBy
 WatchdogSec
+Waveshare
 WebFreak
 Werror
 Weverything
@@ -1400,6 +1412,7 @@ adm
 admin's
 adminbox
 adoc
+advfirewall
 advorder
 ae
 aec
@@ -1517,6 +1530,7 @@ baudrate
 baytech
 baz
 bcdDevice
+bcm
 bcmxcp
 bd
 belkin
@@ -1546,6 +1560,7 @@ bootable
 bp
 br
 brazil
+brcm
 brotli
 bsd
 bt
@@ -1669,6 +1684,7 @@ crw
 crypto
 csh
 cshdelay
+csi
 css
 cstdint
 ctime
@@ -1751,6 +1767,7 @@ dnf
 dnl
 dnsmasq
 docbook
+docdir
 docs
 dod
 domxml
@@ -1768,13 +1785,20 @@ drvpath
 drwxr
 drwxrwx
 ds
+dsi
 dsr
 dsssl
 dstate
 dt
+dtb
+dtbo
+dtc
 dtds
 dtksh
+dtoverlay
+dtparam
 dtr
+dts
 du
 dumbterm
 dummycons
@@ -1973,6 +1997,8 @@ https
 huawei
 hunnox
 hwdb
+hwmon
+hwmonX
 hypervisor
 hypervisors
 iBox
@@ -2005,6 +2031,7 @@ im
 imagesdir
 img
 imv
+ina
 includePath
 includedir
 inductor
@@ -2185,6 +2212,8 @@ lnetsnmp
 loadPercentage
 localcalculation
 localhost
+localip
+localport
 localtime
 lockf
 logfacility
@@ -2331,6 +2360,7 @@ nds
 netcat
 netclient
 netserver
+netsh
 netsnmp
 netvision
 networkupstools
@@ -2511,6 +2541,7 @@ powernet
 poweroff
 powerpal
 powerpanel
+powershell
 powerup
 powervalue
 powerware
@@ -2539,6 +2570,7 @@ probu
 proc
 productid
 prog
+progname
 prtconf
 ps
 psu
@@ -2591,6 +2623,7 @@ regtype
 relatime
 releasekeyring
 relicensing
+remoteip
 renderer
 renderers
 repindex
@@ -2671,6 +2704,8 @@ sendback
 sendline
 sendmail
 sendsignal
+sendsignalfn
+sendsignalpid
 sequentialized
 ser
 seria
@@ -2804,6 +2839,7 @@ sublicense
 sublicenses
 submodule
 submodules
+subnet
 subtree
 sudo
 suid
@@ -2827,6 +2863,7 @@ sysV
 syscalls
 sysconfdir
 sysconfig
+sysfs
 syslog
 syslogd
 systemctl
