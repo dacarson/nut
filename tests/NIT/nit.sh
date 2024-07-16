@@ -17,12 +17,15 @@
 #	NUT_DEBUG_MIN=3	to set (minimum) debug level for drivers, upsd...
 #	NUT_PORT=12345	custom port for upsd to listen and clients to query
 #
+# Common sandbox run for testing goes from NUT root build directory like:
+#	DEBUG_SLEEP=600 NUT_PORT=12345 NIT_CASE=testcase_sandbox_start_drivers_after_upsd make check-NIT &
+#
 # Design note: written with dumbed-down POSIX shell syntax, to
 # properly work in whatever different OSes have (bash, dash,
 # ksh, busybox sh...)
 #
 # Copyright
-#	2022-2023 Jim Klimov <jimklimov+nut@gmail.com>
+#	2022-2024 Jim Klimov <jimklimov+nut@gmail.com>
 #
 # License: GPLv2+
 
@@ -36,6 +39,10 @@ export NUT_QUIET_INIT_SSL
 
 NUT_QUIET_INIT_UPSNOTIFY="true"
 export NUT_QUIET_INIT_UPSNOTIFY
+
+# Avoid noise in syslog and OS console
+NUT_DEBUG_SYSLOG="stderr"
+export NUT_DEBUG_SYSLOG
 
 NUT_DEBUG_PID="true"
 export NUT_DEBUG_PID
@@ -246,6 +253,7 @@ for PROG in upsd upsc dummy-ups upsmon ; do
 done
 
 PID_UPSD=""
+PID_UPSMON=""
 PID_DUMMYUPS=""
 PID_DUMMYUPS1=""
 PID_DUMMYUPS2=""
@@ -263,7 +271,11 @@ if [ `echo "$TESTDIR" | wc -c` -gt 80 ]; then
     fi
     TESTDIR="`mktemp -d "${TMPDIR}/nit-tmp.$$.XXXXXX"`" || die "Failed to mktemp"
 else
-    rm -rf "${TESTDIR}" || true
+    # NOTE: Keep in sync with NIT_CASE handling and the exit-trap below
+    case "${NIT_CASE}" in
+        generatecfg_*|is*) ;;
+        *) rm -rf "${TESTDIR}" || true ;;
+    esac
 fi
 log_info "Using '$TESTDIR' for generated configs and state files"
 
@@ -276,24 +288,26 @@ if [ "`id -u`" = 0 ]; then
 fi
 
 stop_daemons() {
-    if [ -n "$PID_UPSD$PID_DUMMYUPS$PID_DUMMYUPS1$PID_DUMMYUPS2" ] ; then
+    if [ -n "$PID_UPSD$PID_UPSMON$PID_DUMMYUPS$PID_DUMMYUPS1$PID_DUMMYUPS2" ] ; then
         log_info "Stopping test daemons"
-        kill -15 $PID_UPSD $PID_DUMMYUPS $PID_DUMMYUPS1 $PID_DUMMYUPS2 2>/dev/null || return 0
-        wait $PID_UPSD $PID_DUMMYUPS $PID_DUMMYUPS1 $PID_DUMMYUPS2 || true
+        kill -15 $PID_UPSD $PID_UPSMON $PID_DUMMYUPS $PID_DUMMYUPS1 $PID_DUMMYUPS2 2>/dev/null || return 0
+        wait $PID_UPSD $PID_UPSMON $PID_DUMMYUPS $PID_DUMMYUPS1 $PID_DUMMYUPS2 || true
     fi
 
     PID_UPSD=""
+    PID_UPSMON=""
     PID_DUMMYUPS=""
     PID_DUMMYUPS1=""
     PID_DUMMYUPS2=""
 }
 
-trap 'RES=$?; stop_daemons; if [ "${TESTDIR}" != "${BUILDDIR}/tmp" ] ; then rm -rf "${TESTDIR}" ; fi; exit $RES;' 0 1 2 3 15
+trap 'RES=$?; case "${NIT_CASE}" in generatecfg_*|is*) ;; *) stop_daemons; if [ "${TESTDIR}" != "${BUILDDIR}/tmp" ] ; then rm -rf "${TESTDIR}"; fi ;; esac; exit $RES;' 0 1 2 3 15
 
 NUT_STATEPATH="${TESTDIR}/run"
+NUT_PIDPATH="${TESTDIR}/run"
 NUT_ALTPIDPATH="${TESTDIR}/run"
 NUT_CONFPATH="${TESTDIR}/etc"
-export NUT_STATEPATH NUT_ALTPIDPATH NUT_CONFPATH
+export NUT_STATEPATH NUT_PIDPATH NUT_ALTPIDPATH NUT_CONFPATH
 
 # TODO: Find a portable way to (check and) grab a random unprivileged port?
 if [ -n "${NUT_PORT-}" ] && [ "$NUT_PORT" -gt 0 ] && [ "$NUT_PORT" -lt 65536 ] ; then
@@ -345,6 +359,39 @@ export NUT_PORT
 # Help track collisions in log, if someone else starts a test in same directory
 log_info "Using NUT_PORT=${NUT_PORT} for this test run"
 
+# This file is not used by the test code, it is an
+# aid for "DEBUG_SLEEP=X" mode so the caller can
+# quickly source needed values into their shell.
+#
+# WARNING: Variables in this file are not guaranteed
+# to impact subsequent runs of this script (nit.sh),
+# e.g. NUT_PORT may be inherited, but paths would not be!
+#
+# NOTE: `set` typically wraps the values in quotes,
+# but (maybe?) not all shell implementations do.
+# Just in case, we have a fallback with single quotes.
+# FIXME: We assume no extra quoting or escaping in
+# the values when fallback is used. If this is a
+# problem on any platform (Win/Mac and spaces in
+# paths?) please investigate and fix accordingly.
+set | grep -E '^(NUT_|LD_LIBRARY_PATH|DEBUG|PATH).*=' \
+| while IFS='=' read K V ; do
+    case "$K" in
+        LD_LIBRARY_PATH_CLIENT|LD_LIBRARY_PATH_ORIG|PATH_*|NUT_PORT_*)
+            continue
+            ;;
+        DEBUG_SLEEP|PATH|LD_LIBRARY_PATH*) printf '### ' ;;
+    esac
+
+    case "$V" in
+        '"'*'"'|"'"*"'")
+            printf "%s=%s\nexport %s\n\n" "$K" "$V" "$K" ;;
+        *)
+            printf "%s='%s'\nexport %s\n\n" "$K" "$V" "$K" ;;
+    esac
+done > "$NUT_CONFPATH/NIT.env"
+log_info "Populated environment variables for this run into $NUT_CONFPATH/NIT.env"
+
 ### upsd.conf: ##################################################
 
 generatecfg_upsd_trivial() {
@@ -362,7 +409,7 @@ EOF
         chmod 640 "$NUT_CONFPATH/upsd.conf"
     fi
 
-    # Some systems listining on symbolic "localhost" actually
+    # Some systems listening on symbolic "localhost" actually
     # only bind to IPv6, and Python telnetlib resolves IPv4
     # and fails its connection tests. Others fare well with
     # both addresses in one command.
@@ -433,10 +480,27 @@ EOF
 
 ### upsmon.conf: ##################################################
 
+updatecfg_upsmon_supplies() {
+    NUMSUP="${1-}"
+    [ -n "$NUMSUP" ] && [ "$NUMSUP" -ge 0 ] || NUMSUP=1
+
+    [ -s "$NUT_CONFPATH/upsmon.conf" ] \
+    || die "Failed to rewrite config - not populated yet: upsmon.conf"
+
+    # NOTE: "sed -i file" is not ubiquitously portable
+    # Using "cat" to retain FS permissions maybe set above
+    sed -e 's,^\(MINSUPPLIES\) [0-9][0-9]*$,\1 '"$NUMSUP"',' \
+        -e 's,^\(MONITOR .*\) [0-9][0-9]* \(.*\)$,\1 '"$NUMSUP"' \2,' \
+        < "$NUT_CONFPATH/upsmon.conf" > "$NUT_CONFPATH/upsmon.conf.tmp" \
+        && ( cat "$NUT_CONFPATH/upsmon.conf.tmp" > "$NUT_CONFPATH/upsmon.conf" ) \
+        && rm -f "$NUT_CONFPATH/upsmon.conf.tmp"
+}
+
 generatecfg_upsmon_trivial() {
     # Populate the configs for the run
+    rm -f "$NUT_STATEPATH/upsmon.sd.log"
     (  echo 'MINSUPPLIES 0' > "$NUT_CONFPATH/upsmon.conf" || exit
-       echo 'SHUTDOWNCMD "echo TESTING_DUMMY_SHUTDOWN_NOW"' >> "$NUT_CONFPATH/upsmon.conf" || exit
+       echo 'SHUTDOWNCMD "echo \"`date`: TESTING_DUMMY_SHUTDOWN_NOW\" | tee \"'"$NUT_STATEPATH"'/upsmon.sd.log\" "' >> "$NUT_CONFPATH/upsmon.conf" || exit
 
        if [ -n "${NUT_DEBUG_MIN-}" ] ; then
            echo "DEBUG_MIN ${NUT_DEBUG_MIN}" >> "$NUT_CONFPATH/upsmon.conf" || exit
@@ -449,30 +513,50 @@ generatecfg_upsmon_trivial() {
     else
         chmod 640 "$NUT_CONFPATH/upsmon.conf"
     fi
+
+    if [ $# -gt 0 ] ; then
+        updatecfg_upsmon_supplies "$1"
+    fi
 }
 
 generatecfg_upsmon_master() {
     generatecfg_upsmon_trivial
-    echo "MONITOR 'dummy@localhost:$NUT_PORT' 0 'dummy-admin-m' '${TESTPASS_UPSMON_PRIMARY}' master" >> "$NUT_CONFPATH/upsmon.conf" \
+    echo "MONITOR \"dummy@localhost:$NUT_PORT\" 0 \"dummy-admin-m\" \"${TESTPASS_UPSMON_PRIMARY}\" master" >> "$NUT_CONFPATH/upsmon.conf" \
     || die "Failed to populate temporary FS structure for the NIT: upsmon.conf"
+
+    if [ $# -gt 0 ] ; then
+        updatecfg_upsmon_supplies "$1"
+    fi
 }
 
 generatecfg_upsmon_primary() {
     generatecfg_upsmon_trivial
-    echo "MONITOR 'dummy@localhost:$NUT_PORT' 0 'dummy-admin' '${TESTPASS_UPSMON_PRIMARY}' primary" >> "$NUT_CONFPATH/upsmon.conf" \
+    echo "MONITOR \"dummy@localhost:$NUT_PORT\" 0 \"dummy-admin\" \"${TESTPASS_UPSMON_PRIMARY}\" primary" >> "$NUT_CONFPATH/upsmon.conf" \
     || die "Failed to populate temporary FS structure for the NIT: upsmon.conf"
+
+    if [ $# -gt 0 ] ; then
+        updatecfg_upsmon_supplies "$1"
+    fi
 }
 
 generatecfg_upsmon_slave() {
     generatecfg_upsmon_trivial
-    echo "MONITOR 'dummy@localhost:$NUT_PORT' 0 'dummy-user-s' '${TESTPASS_UPSMON_SECONDARY}' slave" >> "$NUT_CONFPATH/upsmon.conf" \
+    echo "MONITOR \"dummy@localhost:$NUT_PORT\" 0 \"dummy-user-s\" \"${TESTPASS_UPSMON_SECONDARY}\" slave" >> "$NUT_CONFPATH/upsmon.conf" \
     || die "Failed to populate temporary FS structure for the NIT: upsmon.conf"
+
+    if [ $# -gt 0 ] ; then
+        updatecfg_upsmon_supplies "$1"
+    fi
 }
 
 generatecfg_upsmon_secondary() {
     generatecfg_upsmon_trivial
-    echo "MONITOR 'dummy@localhost:$NUT_PORT' 0 'dummy-user' '${TESTPASS_UPSMON_SECONDARY}' secondary" >> "$NUT_CONFPATH/upsmon.conf" \
+    echo "MONITOR \"dummy@localhost:$NUT_PORT\" 0 \"dummy-user\" \"${TESTPASS_UPSMON_SECONDARY}\" secondary" >> "$NUT_CONFPATH/upsmon.conf" \
     || die "Failed to populate temporary FS structure for the NIT: upsmon.conf"
+
+    if [ $# -gt 0 ] ; then
+        updatecfg_upsmon_supplies "$1"
+    fi
 }
 
 ### ups.conf: ##################################################
@@ -1332,6 +1416,45 @@ testcases_sandbox_nutscanner() {
 
 # TODO: Some upsmon tests?
 
+upsmon_start_loop() {
+    TESTCASE="${1-upsmon_start_loop}"
+
+    if isPidAlive "$PID_UPSMON" ; then
+        return 0
+    fi
+
+    upsmon -F &
+    PID_UPSMON="$!"
+    log_debug "[${TESTCASE}] Tried to start UPSMON as PID $PID_UPSMON"
+    sleep 2
+    # Due to severe config errors, client could have died by now
+    # TOTHINK: Loop like for upsd?
+
+    # Return code is 0/OK if the client is alive
+    if isPidAlive "$PID_UPSMON" ; then
+        log_debug "[${TESTCASE}] UPSMON PID $PID_UPSMON is alive after a short while"
+        return
+    fi
+
+    log_error "[${TESTCASE}] UPSMON PID $PID_UPSMON is not alive after a short while"
+    return 1
+}
+
+sandbox_start_upsmon_master() {
+    # Optional arg can specify amount of power sources to MONITOR and require
+    if isPidAlive "$PID_UPSMON" ; then
+        # FIXME: Kill and restart? Reconfigure and reload?
+        return 0
+    fi
+
+    sandbox_generate_configs
+    generatecfg_upsmon_master "$@"
+
+    log_info "Starting UPSMON as master for sandbox"
+
+    upsmon_start_loop "sandbox"
+}
+
 ####################################
 
 testgroup_sandbox() {
@@ -1383,6 +1506,16 @@ testgroup_sandbox_nutscanner() {
     sandbox_forget_configs
 }
 
+testgroup_sandbox_upsmon_master() {
+    # Arrange for quick test iterations
+    # Optional arg can specify amount of power sources to MONITOR and require
+    testcase_sandbox_start_drivers_after_upsd
+    sandbox_start_upsmon_master "$@"
+
+    log_separator
+    sandbox_forget_configs
+}
+
 ################################################################
 
 case "${NIT_CASE}" in
@@ -1396,7 +1529,28 @@ case "${NIT_CASE}" in
         log_warn "Be sure to have previously run with DEBUG_SLEEP and"
         log_warn "   have exported the NUT_PORT upsd is listening on!"
         log_warn "========================================================"
-        "${NIT_CASE}" ;;
+        # NOTE: Not quoted, can have further arguments
+        # e.g. NIT_CASE="testgroup_sandbox_upsmon_master 1"
+        eval ${NIT_CASE}
+        ;;
+    generatecfg_*|is*)
+        # NOTE: Keep in sync with TESTDIR cleanup above
+        # (at start-up and at the exit-trap) and stop_daemons below
+        log_warn "========================================================"
+        log_warn "You asked to run just a specific helper method: '${NIT_CASE}'"
+        log_warn "Populated environment variables for this run into a file so you can source them: . '$NUT_CONFPATH/NIT.env'"
+        log_warn "Notably, NUT_CONFPATH='$NUT_CONFPATH' now"
+        log_warn "========================================================"
+        # NOTE: Not quoted, can have further arguments
+        eval ${NIT_CASE}
+        if [ $? = 0 ] ; then
+            PASSED="`expr $PASSED + 1`"
+        else
+            FAILED="`expr $FAILED + 1`"
+            FAILED_FUNCS="$FAILED_FUNCS $NIT_CASE"
+        fi
+        unset DEBUG_SLEEP
+        ;;
     "") # Default test groups:
         testgroup_upsd_invalid_configs
         testgroup_upsd_questionable_configs
@@ -1419,15 +1573,33 @@ if [ -n "${DEBUG_SLEEP-}" ] ; then
     fi
 
     log_separator
-    log_info "Sleeping now as asked (for ${DEBUG_SLEEP} seconds starting `date -u`), so you can play with the driver and server running; hint: export NUT_PORT=$NUT_PORT"
+    log_info "Sleeping now as asked (for ${DEBUG_SLEEP} seconds starting `date -u`), so you can play with the driver and server running"
+    log_info "Populated environment variables for this run into a file so you can source them: . '$NUT_CONFPATH/NIT.env'"
+    printf "PID_NIT_SCRIPT='%s'\nexport PID_NIT_SCRIPT\n" "$$" >> "$NUT_CONFPATH/NIT.env"
+    set | grep -E '^PID_[^ =]*='"'?[0-9][0-9]*'?$" | while IFS='=' read K V ; do
+        V="`echo "$V" | tr -d "'"`"
+        # Dummy comment to reset syntax highlighting due to ' quote above
+        if [ -n "$V" ] ; then
+            printf "%s='%s'\nexport %s\n" "$K" "$V" "$K"
+        fi
+    done >> "$NUT_CONFPATH/NIT.env"
     log_separator
+    cat "$NUT_CONFPATH/NIT.env"
+    log_separator
+    log_info "See above about important variables from the test sandbox and a way to 'source' them into your shell"
+    log_info "You may want to press Ctrl+Z now and command 'bg' to the shell, if you did not start '$0 &' backgrounded already"
+    log_info "To kill the script early, return it to foreground with 'fg' and press Ctrl+C, or 'kill -2 \$PID_NIT_SCRIPT' (kill -2 $$)"
 
     sleep "${DEBUG_SLEEP}"
     log_info "Sleep finished"
     log_separator
 fi
 
-stop_daemons
+# We have a trap.... but for good measure, do some explicit clean-up:
+case "${NIT_CASE}" in
+    generatecfg_*|is*) ;;
+    *) stop_daemons ;;
+esac
 
 if [ "$PASSED" = 0 ] || [ "$FAILED" != 0 ] ; then
     die "Some test scenarios failed!"

@@ -161,6 +161,21 @@ pdf: $(ASCIIDOC_PDF)
 html-single: $(ASCIIDOC_HTML_SINGLE)
 html-chunked: $(ASCIIDOC_HTML_CHUNKED)
 
+# htmldocdir and pdfdir are set by autoconf/automake
+htmldoc_DATA =
+if WITH_HTML_SINGLE
+htmldoc_DATA += $(ASCIIDOC_HTML_SINGLE)
+endif
+# FIXME: Install tools refuse to work with directories in this context
+# and html-chunked documentation has a separate tree per document.
+# Maybe an "(un)install-data-local" or "install-data-hook" for this?
+#if WITH_HTML_CHUNKED
+#htmldoc_DATA += $(ASCIIDOC_HTML_CHUNKED)
+#endif
+if WITH_PDFS
+pdf_DATA = $(ASCIIDOC_PDFS)
+endif
+
 # the "for" loops might better use $^ but it might be not portable
 check-pdf: $(ASCIIDOC_PDF)
 	@FAILED=""; LANG=C; LC_ALL=C; export LANG; export LC_ALL; \
@@ -230,15 +245,16 @@ DOCBUILD_FILTER_GITHUB_LINKS = { \
 # The $< is okay here, it is used in a suffix rule below
 DOCBUILD_CONVERT_GITHUB_LINKS = { \
     echo "  DOC-ASCIIDOC-GITHUB-LINKS    Parsing GitHub link patterns $< => $@"; \
-    cat "$<" | $(DOCBUILD_FILTER_GITHUB_LINKS) > "$@.tmp" \
-    && mv -f "$@.tmp" "$@" \
+    cat "$<" | $(DOCBUILD_FILTER_GITHUB_LINKS) > "$@.tmp.$$$$" \
+    && mv -f "$@.tmp.$$$$" "$@" \
 ; }
 
 .adoc.adoc-parsed:
 	@$(DOCBUILD_CONVERT_GITHUB_LINKS)
 
-$(top_builddir)/ChangeLog:
-	+@echo "  DOC-CHANGELOG-GENERATE	$@" \
+dummy:
+$(top_builddir)/ChangeLog: dummy
+	+@echo "  DOC-CHANGELOG-GENERATE	$@ : call parent Makefile" \
 	 && cd $(top_builddir) && $(MAKE) $(AM_MAKEFLAGS) $(@F)
 
 # BSD Make dislikes the path resolution here and does not always populate "$<"
@@ -262,7 +278,7 @@ $(top_builddir)/ChangeLog.adoc: $(top_builddir)/ChangeLog
 	     exit ; \
 	 } ; \
 	 echo "  DOC-CHANGELOG-ASCIIDOC	$${INPUT} => $@" \
-	 && printf "ifdef::txt[]\n== Very detailed Change Log\n"$(A2X_ASCII_IDS)"endif::txt[]\n\n" > "$@.tmp" \
+	 && printf "ifdef::txt[]\n== Very detailed Change Log\n"$(A2X_ASCII_IDS)"endif::txt[]\n\n" > "$@.tmp.$$$$" \
 	 && TABCHAR="`printf '\t'`" \
 	 && $(SED) \
 	        -e 's,^\([0-9a-zA-Z]\),=== \1,' \
@@ -273,8 +289,8 @@ $(top_builddir)/ChangeLog.adoc: $(top_builddir)/ChangeLog
 	        -e 's,^\([ '"$${TABCHAR}"'].*\)\([~|^]\),\1\\\2,g' \
 	        -e 's,\[\[\([^]]*\)\]\],[\1],g' \
 	        -e 's,^\(\s\s*\)\([0-9]\),\1{empty}\2,g' \
-	   < "$${INPUT}" >> "$@.tmp" \
-	 && mv -f "$@.tmp" "$@"
+	   < "$${INPUT}" >> "$@.tmp.$$$$" \
+	 && mv -f "$@.tmp.$$$$" "$@"
 
 # Add other directory deps (not for local EXTRA_DIST) and generated contents
 FULL_USER_MANUAL_DEPS = $(USER_MANUAL_DEPS) $(SHARED_DEPS) \
@@ -554,7 +570,7 @@ spellcheck:
 	 done ; \
 	 if test -n "$$FAILED" ; then \
 		echo "=====================================================================" ; \
-		echo "FAILED automatic spellcheck for the following sources (relative to `pwd`): $$FAILED" ; \
+		echo "FAILED automatic spellcheck for the following sources (relative to `pwd`) using custom dictionary file '$(NUT_SPELL_DICT)': $$FAILED" ; \
 		echo "=====================================================================" ; \
 		echo "Please 'cd $(abs_top_builddir) && make spellcheck-interactive'"; \
 		echo "to either fix document sources or update the dictionary of accepted"; \
@@ -601,13 +617,13 @@ spellcheck-interactive:
 			FAILED="$$FAILED $(SPELLCHECK_SRCDIR)/$$docsrc"; \
 	done ; \
 	if test -n "$$FAILED" ; then \
-		echo "FAILED interactive spellcheck for the following sources (relative to `pwd`): $$FAILED" >&2 ; \
+		echo "FAILED interactive spellcheck for the following sources (relative to `pwd`) using custom dictionary file '$(NUT_SPELL_DICT)': $$FAILED" >&2 ; \
 		exit 1; \
 	fi ; exit 0
 	+$(MAKE) $(AM_MAKEFLAGS) spellcheck-sortdict
 	@echo "------------------------------------------------------------------------"; \
 	 echo "Custom dictionary file $(NUT_SPELL_DICT) may have been updated now."; \
-	 echo "Use 'git add -p docs/$(NUT_SPELL_DICT) && git checkout -- docs/$(NUT_SPELL_DICT) && make spellcheck-sortdict && git add -p docs/$(NUT_SPELL_DICT)'"; \
+	 echo "Use e.g. 'git add -p docs/$(NUT_SPELL_DICT) && git checkout -- docs/$(NUT_SPELL_DICT) && make spellcheck-sortdict && git add -p docs/$(NUT_SPELL_DICT)'"; \
 	 echo "to review changes (please DO NOT REMOVE LINES that aspell chose to drop,"; \
 	 echo "because other systems might not know these words in their system dictionaries)"; \
 	 echo "------------------------------------------------------------------------"
@@ -650,8 +666,9 @@ $(NUT_SPELL_DICT).usage-report: $(NUT_SPELL_DICT)
 				if [ "$$HITC_CI" != 0 ] ; then echo "$$HITS_CI" ; echo "^^^"; fi; \
 			fi; \
 		); \
-	 done > "$@.tmp"
-	test -f "$@.tmp" && mv -f "$@.tmp" "$@"
+	 done > "$@.tmp.$$$$" \
+	 && test -f "$@.tmp.$$$$" \
+	 && mv -f "$@.tmp.$$$$" "$@"
 	@echo "Reporting words from $? possibly not used in current inspected code base revision under $(abs_top_srcdir)" >&2 ; \
 	 grep -E '^--- ' < "$@" | grep '(0 ' || echo "SUCCESS: None found"
 

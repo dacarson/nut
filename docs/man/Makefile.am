@@ -87,6 +87,13 @@ MAN_CLIENT_PAGES = \
 	upssched.8
 endif WITH_MANS
 
+if HAVE_WINDOWS
+SRC_CLIENT_PAGES += nut.exe.txt
+if WITH_MANS
+MAN_CLIENT_PAGES += nut.exe.8
+endif WITH_MANS
+endif HAVE_WINDOWS
+
 man8_MANS = $(MAN_CLIENT_PAGES)
 
 HTML_CLIENT_MANS = \
@@ -101,6 +108,10 @@ HTML_CLIENT_MANS = \
 	upsmon.html \
 	upsrw.html \
 	upssched.html
+
+if HAVE_WINDOWS
+HTML_CLIENT_MANS += nut.exe.html
+endif HAVE_WINDOWS
 
 SRC_TOOL_PAGES = nut-scanner.txt nut-recorder.txt nutconf.txt
 
@@ -419,6 +430,7 @@ SRC_SERIAL_PAGES = \
 	bestuferrups.txt	\
 	bestups.txt 	\
 	bestfcom.txt	\
+	bicker_ser.txt	\
 	blazer-common.txt	\
 	blazer_ser.txt	\
 	clone.txt \
@@ -466,6 +478,7 @@ MAN_SERIAL_PAGES = \
 	bestuferrups.8	\
 	bestups.8 	\
 	bestfcom.8	\
+	bicker_ser.8	\
 	blazer_ser.8	\
 	clone.8 \
 	dummy-ups.8	\
@@ -515,6 +528,7 @@ HTML_SERIAL_MANS = \
 	bestuferrups.html	\
 	bestups.html 	\
 	bestfcom.html	\
+	bicker_ser.html	\
 	blazer_ser.html	\
 	clone.html \
 	dummy-ups.html	\
@@ -711,17 +725,17 @@ HTML_MODBUS_MANS = phoenixcontact_modbus.html \
 endif ! SOME_DRIVERS
 
 # (--with-linux_i2c)
-SRC_LINUX_I2C_PAGES = asem.txt pijuice.txt upsplus.txt
+SRC_LINUX_I2C_PAGES = asem.txt pijuice.txt hwmon_ina219.txt upsplus.txt
 if ! SOME_DRIVERS
 if WITH_MANS
-MAN_LINUX_I2C_PAGES = asem.8 pijuice.8 upsplus.8
+MAN_LINUX_I2C_PAGES = asem.8 pijuice.8 hwmon_ina219.8 upsplus.8
 endif WITH_MANS
 
 if WITH_LINUX_I2C
 man8_MANS += $(MAN_LINUX_I2C_PAGES)
 endif WITH_LINUX_I2C
 
-HTML_LINUX_I2C_MANS = asem.html pijuice.html upsplus.html
+HTML_LINUX_I2C_MANS = asem.html pijuice.html hwmon_ina219.html upsplus.html
 endif ! SOME_DRIVERS
 
 # (--with-gpio)
@@ -833,6 +847,16 @@ HTML_MANS = \
 	$(HTML_MODBUS_MANS) \
 	$(HTML_LINUX_I2C_MANS) \
 	$(HTML_GPIO_MANS)
+
+# htmlmandir is set by autoconf/automake
+htmlman_DATA =
+if WITH_HTML_SINGLE
+htmlman_DATA += $(HTML_MANS)
+else !WITH_HTML_SINGLE
+if WITH_HTML_CHUNKED
+htmlman_DATA += $(HTML_MANS)
+endif WITH_HTML_CHUNKED
+endif !WITH_HTML_SINGLE
 
 # Note: target documents, except nutupsdrv.txt itself, start the
 # list of drivers with `- linkman:nutupsdrv[8]` entry

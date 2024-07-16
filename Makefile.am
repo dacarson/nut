@@ -70,6 +70,7 @@ endif
 
 DISTCHECK_FLAGS = --with-all --with-ssl --with-doc=auto --with-pynut=app --with-nut_monitor=force
 DISTCHECK_LIGHT_FLAGS = --with-all=auto --with-ssl=auto --with-doc=auto --with-pynut=app --with-nut_monitor=force
+DISTCHECK_LIGHT_MAN_FLAGS = --with-all=auto --with-ssl=auto --with-doc=man --with-pynut=app --with-nut_monitor=force
 DISTCHECK_VALGRIND_FLAGS = --with-all=auto --with-ssl=auto --with-doc=skip --with-valgrind CXXFLAGS='$(CXXFLAGS) -g' CFLAGS='$(CFLAGS) -g' --with-pynut=app --with-nut_monitor=force
 
 # Note: this rule uses envvar DISTCHECK_FLAGS expanded at run-time
@@ -85,6 +86,9 @@ DISTCHECK_CONFIGURE_FLAGS = ${DISTCHECK_FLAGS}		\
 
 distcheck-light:
 	+$(MAKE) $(AM_MAKEFLAGS) DISTCHECK_FLAGS="$(DISTCHECK_LIGHT_FLAGS)" distcheck
+
+distcheck-light-man:
+	+$(MAKE) $(AM_MAKEFLAGS) DISTCHECK_FLAGS="$(DISTCHECK_LIGHT_MAN_FLAGS)" distcheck
 
 # Make a distcheck (and check in particular) with enabled valgrind and debug info
 memcheck distcheck-valgrind:
@@ -177,7 +181,7 @@ spellcheck spellcheck-interactive:
 # texts, man pages and HTML rendering of man pages, as enabled by tools.
 doc spellcheck-sortdict spellcheck-report-dict-usage \
 all-docs check-docs \
-man all-man man-man check-man man-html all-html:
+man all-man man-man check-man html-man all-html:
 	+cd $(abs_top_builddir)/docs && $(MAKE) $(AM_MAKEFLAGS) -s $(abs_top_builddir)/docs/.prep-src-docs
 	+cd $(abs_top_builddir)/docs/man && $(MAKE) $(AM_MAKEFLAGS) -s $(abs_top_builddir)/docs/man/.prep-src-docs
 	+cd $(abs_top_builddir)/docs && $(MAKE) $(AM_MAKEFLAGS) $@
@@ -342,19 +346,45 @@ else
 WITH_PDF_NONASCII_TITLES_ENVVAR = WITH_PDF_NONASCII_TITLES=no
 endif
 
-# Be sure to not confuse with a DIST'ed file (and so try to overwrite it):
+# Be sure to not confuse with a DIST'ed file (and so try to overwrite it);
+# do however avoid re-generating it if already made on a previous pass and
+# the Git HEAD pointer (branch) or its actual "index" or "object" database
+# did not change since then - meaning the local developer or CI did not
+# modify the metadata (subsequent generation of the huge PDF/HTML files
+# can cost dearly).
+# Note there's a bit more fuss about Git internals which NUT should not
+# really care about encapsulation-wise (detection of NUT_GITDIR location
+# which may reside elsewhere, e.g. with local repo clones with reference
+# repo configuration, or submodules). But this is a Git-crawling target
+# anyway, and in the worst case (Git's design changes) we would spend a
+# bit of time researching the FS in vain, and go on to re-generate the
+# ChangeLog when maybe we should not have - oh well:
 $(abs_top_builddir)/ChangeLog: tools/gitlog2changelog.py dummy-stamp
 	@cd $(abs_top_srcdir) && \
 	    if test -e .git ; then \
-	        CHANGELOG_FILE="$@" $(WITH_PDF_NONASCII_TITLES_ENVVAR) $(abs_top_builddir)/tools/gitlog2changelog.py $(GITLOG_START_POINT) || \
-	        { printf "gitlog2changelog.py failed to generate the ChangeLog.\n\nNOTE: See https://github.com/networkupstools/nut/commits/master for change history.\n\n" > "$@" ; } ; \
+	        NUT_GITDIR=".git" ; if test -r "$${NUT_GITDIR}" -a ! -d "$${NUT_GITDIR}" ; then GD="`grep -E '^gitdir:' "$${NUT_GITDIR}" | sed 's/^gitdir: *//'`" && test -n "$$GD" -a -d "$$GD" && NUT_GITDIR="$$GD" ; fi ; \
+	        if test -s "$@" -a -d "$${NUT_GITDIR}" && test -z "`find "$${NUT_GITDIR}" -newer "$@" 2>/dev/null`" ; then \
+	            echo "  DOC-CHANGELOG-GENERATE        $@ : SKIP (keep existing)" ; \
+	            echo "Using still-valid ChangeLog file generated earlier from same revision of Git source metadata in '$${NUT_GITDIR}'" >&2 ; \
+	        else \
+	            echo "  DOC-CHANGELOG-GENERATE        $@" ; \
+	            CHANGELOG_FILE="$@" $(WITH_PDF_NONASCII_TITLES_ENVVAR) $(abs_top_builddir)/tools/gitlog2changelog.py $(GITLOG_START_POINT) || { \
+	                echo "  DOC-CHANGELOG-GENERATE        $@ : FAILED (non-fatal)" >&2 ; \
+	                printf "gitlog2changelog.py failed to generate the ChangeLog.\n\nNOTE: See https://github.com/networkupstools/nut/commits/master for change history.\n\n" > "$@" ; \
+	            } ; \
+	        fi ; \
 	    else \
 	        if test x"$(abs_top_srcdir)" != x"$(abs_top_builddir)" -a -s ./ChangeLog ; then \
+	            echo "  DOC-CHANGELOG-GENERATE        $@ : SKIP (keep existing)" ; \
 	            echo "Using distributed ChangeLog file from sources" >&2 ; \
 	            rm -f "$@" || true ; \
 	            cat ./ChangeLog > "$@" ; \
 	        else \
-	            if ! test -s "$@" ; then \
+	            if test -s "$@" ; then \
+	                echo "  DOC-CHANGELOG-GENERATE        $@ : SKIP (keep existing)" ; \
+	                echo "Using distributed ChangeLog file from sources" >&2 ; \
+	            else \
+	                echo "  DOC-CHANGELOG-GENERATE        $@ : FAILED (non-fatal)" >&2 ; \
 	                printf "Failed to generate the ChangeLog.\n\nNOTE: See https://github.com/networkupstools/nut/commits/master for change history.\n\n" > "$@" ; \
 	            fi ; \
 	        fi ; \

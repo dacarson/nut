@@ -5,6 +5,7 @@
 	2008		Arjen de Korte <adkorte-guest@alioth.debian.org>
 	2011 - 2012	Arnaud Quette <arnaud.quette.free.fr>
 	2019 		Eaton (author: Arnaud Quette <ArnaudQuette@eaton.com>)
+	2020 - 2024	Jim Klimov <jimklimov+nut@gmail.com>
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -191,6 +192,8 @@ upstype_t *get_ups_ptr(const char *name)
 	upstype_t	*tmp;
 
 	if (!name) {
+		upsdebugx(3, "%s: not a valid UPS: <null>",
+			__func__);
 		return NULL;
 	}
 
@@ -200,6 +203,8 @@ upstype_t *get_ups_ptr(const char *name)
 		}
 	}
 
+	upsdebugx(3, "%s: not a valid UPS: %s",
+		__func__, NUT_STRARG(name));
 	return NULL;
 }
 
@@ -1088,6 +1093,8 @@ static void driver_free(void)
 
 static void upsd_cleanup(void)
 {
+	upsdebugx(1, "%s: starting the end-game", __func__);
+
 	if (strlen(pidfn) > 0) {
 		unlink(pidfn);
 	}
@@ -1117,6 +1124,8 @@ static void upsd_cleanup(void)
 		CloseHandle(mutex);
 	}
 #endif
+
+	upsdebugx(1, "%s: finished", __func__);
 }
 
 static void poll_reload(void)
@@ -1875,7 +1884,7 @@ void check_perms(const char *fn)
 
 	/* include the x bit here in case we check a directory */
 	if (st.st_mode & (S_IROTH | S_IXOTH)) {
-		upslogx(LOG_WARNING, "%s is world readable", fn);
+		upslogx(LOG_WARNING, "WARNING: %s is world readable (hope you don't have passwords there)", fn);
 	}
 #else
 	NUT_UNUSED_VARIABLE(fn);
@@ -2033,21 +2042,21 @@ int main(int argc, char **argv)
 	 * is running (error if it is).
 	 */
 	/* Hush the fopen(pidfile) message but let "real errors" be seen */
-	nut_sendsignal_debug_level = NUT_SENDSIGNAL_DEBUG_LEVEL_FOPEN_PIDFILE - 1;
+	nut_sendsignal_debug_level = NUT_SENDSIGNAL_DEBUG_LEVEL_KILL_SIG0PING - 1;
 #ifndef WIN32
 	/* If cmd == 0 we are starting and check if a previous instance
 	 * is running by sending signal '0' (i.e. 'kill <pid> 0' equivalent)
 	 */
 
 	if (oldpid < 0) {
-		cmdret = sendsignalfn(pidfn, cmd);
+		cmdret = sendsignalfn(pidfn, cmd, progname, 1);
 	} else {
-		cmdret = sendsignalpid(oldpid, cmd);
+		cmdret = sendsignalpid(oldpid, cmd, progname, 1);
 	}
 #else	/* if WIN32 */
 	if (cmd) {
 		/* Command the running daemon, it should be there */
-		cmdret = sendsignal(UPSD_PIPE_NAME, cmd);
+		cmdret = sendsignal(UPSD_PIPE_NAME, cmd, 1);
 	} else {
 		/* Starting new daemon, check for competition */
 		mutex = CreateMutex(NULL, TRUE, UPSD_PIPE_NAME);

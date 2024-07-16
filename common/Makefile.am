@@ -47,11 +47,22 @@ $(top_builddir)/include/nut_version.h:
 
 libcommon_la_SOURCES = state.c str.c upsconf.c
 libcommonclient_la_SOURCES = state.c str.c
+
+# several other Makefiles include the two helpers common.c str.c (and
+# perhaps some other string-related code), so make them a library too;
+# note that LTLIBOBJS pulls in snprintf.c contents too.
+noinst_LTLIBRARIES += libcommonstr.la
+libcommonstr_la_SOURCES = str.c
+libcommonstr_la_CFLAGS = $(AM_CFLAGS) -DWITHOUT_LIBSYSTEMD=1
+libcommonstr_la_LIBADD = @LTLIBOBJS@ @BSDKVMPROCLIBS@
+
 if BUILDING_IN_TREE
   libcommon_la_SOURCES += common.c
+  libcommonstr_la_SOURCES += common.c
   libcommonclient_la_SOURCES += common.c
 else !BUILDING_IN_TREE
   nodist_libcommon_la_SOURCES = common.c
+  nodist_libcommonstr_la_SOURCES = common.c
   nodist_libcommonclient_la_SOURCES = common.c
   CLEANFILES += $(top_builddir)/common/common.c
   BUILT_SOURCES = common.c
@@ -62,6 +73,7 @@ if HAVE_STRPTIME
 else !HAVE_STRPTIME
   # fall back to NetBSD implem
   libcommon_la_SOURCES += strptime.c
+  libcommonstr_la_SOURCES += strptime.c
   libcommonclient_la_SOURCES += strptime.c
 endif !HAVE_STRPTIME
 
@@ -70,6 +82,7 @@ if HAVE_STRNLEN
 else !HAVE_STRNLEN
   # fall back to FreeBSD implem
   libcommon_la_SOURCES += strnlen.c
+  libcommonstr_la_SOURCES += strnlen.c
   libcommonclient_la_SOURCES += strnlen.c
 endif !HAVE_STRNLEN
 
@@ -78,6 +91,7 @@ if HAVE_STRSEP
 else !HAVE_STRSEP
   # fall back to simple implem
   libcommon_la_SOURCES += strsep.c
+  libcommonstr_la_SOURCES += strsep.c
   libcommonclient_la_SOURCES += strsep.c
 endif !HAVE_STRSEP
 
@@ -97,8 +111,8 @@ endif HAVE_WINDOWS
 
 # ensure inclusion of local implementation of missing systems functions
 # using LTLIBOBJS. Refer to configure.in/.ac -> AC_REPLACE_FUNCS
-libcommon_la_LIBADD = libparseconf.la @LTLIBOBJS@ @NETLIBS@
-libcommonclient_la_LIBADD = libparseconf.la @LTLIBOBJS@ @NETLIBS@
+libcommon_la_LIBADD = libparseconf.la @LTLIBOBJS@ @NETLIBS@ @BSDKVMPROCLIBS@
+libcommonclient_la_LIBADD = libparseconf.la @LTLIBOBJS@ @NETLIBS@ @BSDKVMPROCLIBS@
 
 libcommon_la_CFLAGS = $(AM_CFLAGS)
 libcommonclient_la_CFLAGS = $(AM_CFLAGS)
@@ -111,6 +125,9 @@ endif WITH_NUTCONF
 if HAVE_LIBREGEX
   libcommon_la_CFLAGS += $(LIBREGEX_CFLAGS)
   libcommon_la_LIBADD += $(LIBREGEX_LIBS)
+
+  libcommonstr_la_CFLAGS += $(LIBREGEX_CFLAGS)
+  libcommonstr_la_LIBADD += $(LIBREGEX_LIBS)
 
   libcommonclient_la_CFLAGS += $(LIBREGEX_CFLAGS)
   libcommonclient_la_LIBADD += $(LIBREGEX_LIBS)

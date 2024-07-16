@@ -252,7 +252,10 @@ AS_CASE([${target_os}],
 
 cgiexecdir='${exec_prefix}/cgi-bin'
 driverexecdir='${exec_prefix}/bin'
+dnl Note: htmldir per se is originally for nut-cgi resources
 htmldir='${prefix}/html'
+htmldocdir='${docdir}/html-doc'
+htmlmandir='${docdir}/html-man'
 pkgconfigdir='${libdir}/pkgconfig'
 auglensdir='/usr/share/augeas/lenses/dist'
 if test ! -d "${auglensdir}"; then
@@ -1044,6 +1047,12 @@ AC_CHECK_HEADER([sys/select.h],
     [AC_DEFINE([HAVE_SYS_SELECT_H], [1],
         [Define to 1 if you have <sys/select.h>.])])
 
+AC_CHECK_HEADER([unistd.h],
+    [AC_DEFINE([HAVE_UNISTD_H], [1],
+        [Define to 1 if you have <unistd.h>.])])
+
+AC_CHECK_FUNCS(readlink)
+
 AC_CACHE_CHECK([for suseconds_t],
     [ac_cv_type_suseconds_t],
     [AC_COMPILE_IFELSE(
@@ -1100,6 +1109,68 @@ if (usleep(us) != 0) return 1 /* per doc, no errors are returned actually */
 AS_IF([test x"${ac_cv_func_usleep}" = xyes],
     [AC_DEFINE([HAVE_USLEEP], 1, [defined if standard library has, and C standard allows, the usleep(us) method])],
     [AC_MSG_WARN([Required C library routine usleep not found; try adding -D_POSIX_C_SOURCE=200112L])]
+    )
+
+dnl OpenBSD (at least) methods to query process info, per
+dnl https://github.com/openbsd/src/blob/master/bin/ps/ps.c
+dnl https://kaashif.co.uk/2015/06/18/how-to-get-a-list-of-processes-on-openbsd-in-c/
+BSDKVMPROCLIBS=""
+myLIBS="$LIBS"
+LIBS="$LIBS -lkvm"
+AC_CACHE_CHECK([for BSD KVM process info libs],
+    [ac_cv_lib_bsd_kvm_proc],
+    [AC_LINK_IFELSE(
+        [AC_LANG_PROGRAM([[
+#include <stdio.h>
+#include <kvm.h>
+#include <limits.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
+        ]],
+            [[
+    char errbuf[_POSIX2_LINE_MAX];
+    kvm_t *kernel = kvm_openfiles(NULL, NULL, NULL, KVM_NO_FILES, errbuf);
+    int nentries = 0;
+    struct kinfo_proc *kinfo = kvm_getprocs(kernel, KERN_PROC_ALL, 0, sizeof(struct kinfo_proc), &nentries);
+    int i;
+    for (i = 0; i < nentries; ++i) {
+        printf("%s\n", kinfo[i].p_comm);
+    }
+/* autoconf adds ";return 0;" */
+/* we hope the code above fails if type is not defined or range is not sufficient */
+]])],
+        [ac_cv_lib_bsd_kvm_proc=yes
+        BSDKVMPROCLIBS="-lkvm"
+        ], [ac_cv_lib_bsd_kvm_proc=no]
+    )])
+LIBS="$myLIBS"
+
+AS_IF([test x"${ac_cv_lib_bsd_kvm_proc}" = xyes],
+    [AC_DEFINE([HAVE_LIB_BSD_KVM_PROC], 1, [defined if we have libs, includes and methods for BSD KVM process info])]
+    )
+
+dnl https://github.com/illumos/illumos-gate/blob/master/usr/src/uts/common/sys/procfs.h#L318
+dnl https://github.com/illumos/illumos-gate/blob/master/usr/src/cmd/ps/ps.c
+AC_CACHE_CHECK([for Solaris/illumos process info libs],
+    [ac_cv_lib_illumos_proc],
+    [AC_LINK_IFELSE(
+        [AC_LANG_PROGRAM([[
+#include <stdio.h>
+#include <procfs.h>
+        ]],
+            [[
+    psinfo_t info;
+    printf("%s", info.pr_fname)
+/* autoconf adds ";return 0;" */
+/* we hope the code above fails if type is not defined or range is not sufficient */
+]])],
+        [ac_cv_lib_illumos_proc=yes
+        ], [ac_cv_lib_illumos_proc=no]
+    )])
+LIBS="$myLIBS"
+
+AS_IF([test x"${ac_cv_lib_illumos_proc}" = xyes],
+    [AC_DEFINE([HAVE_LIB_ILLUMOS_PROC], 1, [defined if we have libs, includes and methods for Solaris/illumos process info])]
     )
 
 AC_LANG_POP([C])
@@ -2220,6 +2291,8 @@ fi
 NUT_REPORT_FEATURE([enable libltdl (Libtool dlopen abstraction) support], [${nut_with_libltdl}], [],
 					[WITH_LIBLTDL], [Define to enable libltdl (Libtool dlopen abstraction) support])
 
+dnl Explicitly report if we are building nut-scanner or not
+dnl since it requires libltdl
 if test x"${nut_with_libltdl}" = x"no" && test x"${nut_with_nut_scanner}" = x"yes"; then
     AC_MSG_ERROR([libltdl support was disabled or not found, but --with-nut-scanner was requested and requires it])
 fi
@@ -2615,6 +2688,9 @@ case "${nut_with_doc}" in
 	skip|all=skip)
 		nut_doc_build_list="man=skip html-single=skip html-chunked=skip pdf=skip"
 		;;
+	dist-auto) # Experimental, currently only for MANs: prefer disted files if present, auto otherwise
+		nut_doc_build_list="man=dist-auto html-single=dist-auto html-chunked=dist-auto pdf=dist-auto"
+		;;
 	no|all=no)
 		nut_doc_build_list=""
 		;;
@@ -2655,7 +2731,7 @@ for nut_doc_build_target in $nut_doc_build_list; do
 		;;
 	esac
 	case "${nut_doc_build_target_flag}" in
-	yes|no|auto|skip) ;;
+	yes|no|auto|skip|dist-auto) ;;
 	"") nut_doc_build_target_flag="yes" ;;
 	*)	rm -rf "${DOCTESTDIR}"
 		AC_MSG_ERROR([Invalid documentation format option: ${nut_doc_build_target}]) ;;
@@ -2746,31 +2822,48 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 		;;
 
 	man*)
+		dnl Experimental support for --with-doc=man=dist-auto to prefer pre-disted docs if available, below
 		AC_MSG_CHECKING([if we can build ${nut_doc_build_target_base}])
 		can_build_doc_man=no
+		have_disted_doc_man=no
+		want_disted_doc_man=no
+		if test -s "${abs_srcdir}"/docs/man/snmp-ups.8 ; then
+			dnl Test that groff files exist (building from distributed tarball, not git repo)
+			have_disted_doc_man=yes
+		fi
+		if test x"${nut_doc_build_target}" = x"man=dist-auto" || test "${nut_doc_build_target_flag}" = "dist-auto"; then
+			want_disted_doc_man=yes
+		fi
 		if test "${nut_have_asciidoc}" = yes ; then
 			( cd "$DOCTESTDIR" && ${A2X} --format manpage --destination-dir=. --xsltproc-opts="--nonet" "${abs_srcdir}"/docs/man/snmp-ups.txt && test -s snmp-ups.8 ) && can_build_doc_man=yes
 			rm -f "${DOCTESTDIR}"/snmp-ups.8
 		fi
-		if test "${can_build_doc_man}" = yes ; then
-			AC_MSG_RESULT(yes)
-			DOC_BUILD_LIST="${DOC_BUILD_LIST} ${nut_doc_build_target_base}"
+		if test "${want_disted_doc_man}" = yes && test "${have_disted_doc_man}" = yes ; then
+			AC_MSG_NOTICE([Requested, and can, install pre-built distributed copies of ${nut_doc_build_target_base} documentation])
+			DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
+			DOC_INSTALL_DISTED_MANS="yes"
+			dnl Avoid rebuilding existing build products due to their timestamp dependencies:
+			touch -r "${abs_srcdir}"/docs/man/Makefile.am "${abs_srcdir}"/docs/man/*.{1,2,3,4,5,6,7,8,9}* "${abs_srcdir}"/docs/man/*.{txt,xml,html,pdf} || true
 		else
-			AC_MSG_RESULT(no)
-			if test "${nut_doc_build_target_flag}" = "yes" ; then
-				DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
-				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+			if test "${can_build_doc_man}" = yes ; then
+				AC_MSG_RESULT(yes)
+				DOC_BUILD_LIST="${DOC_BUILD_LIST} ${nut_doc_build_target_base}"
 			else
-				DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
-				if test "${nut_doc_build_target_flag}" = "auto" ; then
-dnl Test that groff files exist (building from distributed tarball, not git repo)
-					if test -s "${abs_srcdir}"/docs/man/snmp-ups.8 ; then
-						AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, but can install pre-built distributed copies])
-						DOC_INSTALL_DISTED_MANS="yes"
-					else
-						AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, and unable to install pre-built distributed copies because they are absent])
-					fi
-				fi  # Other variants include "no", "skip"...
+				AC_MSG_RESULT(no)
+				if test "${nut_doc_build_target_flag}" = "yes" ; then
+					DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
+					AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+				else
+					DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
+					if test "${nut_doc_build_target_flag}" = "auto" || test "${nut_doc_build_target_flag}" = "dist-auto" ; then
+						if test "${have_disted_doc_man}" = yes ; then
+							AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, but can install pre-built distributed copies])
+							DOC_INSTALL_DISTED_MANS="yes"
+						else
+							AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, and unable to install pre-built distributed copies because they are absent])
+						fi
+					fi  # Other variants include "no", "skip"...
+				fi
 			fi
 		fi
 		;;
@@ -2818,9 +2911,9 @@ NUT_REPORT_FEATURE([build specific documentation format(s)], [${nut_with_doc}], 
 # for "make check" in "docs/" here...
 DOC_CHECK_LIST=""
 if test "${nut_with_doc}" = yes ; then
-    for V in $DOC_BUILD_LIST ; do
-        DOC_CHECK_LIST="$DOC_CHECK_LIST check-$V"
-    done
+	for V in $DOC_BUILD_LIST ; do
+		DOC_CHECK_LIST="$DOC_CHECK_LIST check-$V"
+	done
 fi
 
 WITH_MANS=no
@@ -2839,6 +2932,39 @@ dnl is effectively ignored by docs/man/Makefile.am at this time.
 AM_CONDITIONAL(WITH_MANS, test "${WITH_MANS}" = "yes")
 AM_CONDITIONAL(SKIP_MANS, test "${SKIP_MANS}" = "yes")
 AM_CONDITIONAL(DOC_INSTALL_DISTED_MANS, test "${DOC_INSTALL_DISTED_MANS}" = "yes")
+
+WITH_HTML_SINGLE=no
+SKIP_HTML_SINGLE=no
+if echo "${DOC_BUILD_LIST}" | grep -w "html-single" >/dev/null ; then
+	WITH_HTML_SINGLE=yes
+fi
+if echo "${DOC_SKIPBUILD_LIST}" | grep -w "html-single" >/dev/null ; then
+	SKIP_HTML_SINGLE=yes
+fi
+AM_CONDITIONAL(WITH_HTML_SINGLE, test "${WITH_HTML_SINGLE}" = "yes")
+AM_CONDITIONAL(SKIP_HTML_SINGLE, test "${SKIP_HTML_SINGLE}" = "yes")
+
+WITH_HTML_CHUNKED=no
+SKIP_HTML_CHUNKED=no
+if echo "${DOC_BUILD_LIST}" | grep -w "html-chunked" >/dev/null ; then
+	WITH_HTML_CHUNKED=yes
+fi
+if echo "${DOC_SKIPBUILD_LIST}" | grep -w "html-chunked" >/dev/null ; then
+	SKIP_HTML_CHUNKED=yes
+fi
+AM_CONDITIONAL(WITH_HTML_CHUNKED, test "${WITH_HTML_CHUNKED}" = "yes")
+AM_CONDITIONAL(SKIP_HTML_CHUNKED, test "${SKIP_HTML_CHUNKED}" = "yes")
+
+WITH_PDFS=no
+SKIP_PDFS=no
+if echo "${DOC_BUILD_LIST}" | grep -w "pdf" >/dev/null ; then
+	WITH_PDFS=yes
+fi
+if echo "${DOC_SKIPBUILD_LIST}" | grep -w "pdf" >/dev/null ; then
+	SKIP_PDFS=yes
+fi
+AM_CONDITIONAL(WITH_PDFS, test "${WITH_PDFS}" = "yes")
+AM_CONDITIONAL(SKIP_PDFS, test "${SKIP_PDFS}" = "yes")
 
 dnl ----------------------------------------------------------------------
 dnl checks related to --with-dev
@@ -3805,6 +3931,12 @@ else
 fi
 AM_CONDITIONAL(WITH_AUGLENS, test -n "${auglensdir}")
 
+if test -n "${auglensdir}"; then
+	auglenstestsdir="${auglensdir}/tests"
+else
+	auglenstestsdir=''
+fi
+
 AC_PATH_PROGS([AUGPARSE], [augparse], [none])
 AM_CONDITIONAL([HAVE_AUGPARSE], [test "x${AUGPARSE}" != "xnone"])
 AC_MSG_CHECKING([whether to enable Augeas configuration-management lenses tests])
@@ -3814,6 +3946,7 @@ else
 	AC_MSG_RESULT(no)
 fi
 
+dnl ----------------------------------------------------------------------
 
 AC_MSG_CHECKING(whether to install hotplug rules)
 AC_ARG_WITH(hotplug-dir,
@@ -4287,6 +4420,7 @@ AC_SUBST(DRIVER_BUILD_LIST)
 AC_SUBST(DRIVER_MAN_LIST)
 AC_SUBST(DRIVER_MAN_LIST_PAGES)
 AC_SUBST(DRIVER_INSTALL_TARGET)
+AC_SUBST(BSDKVMPROCLIBS)
 AC_SUBST(NETLIBS)
 AC_SUBST(SERLIBS)
 AC_SUBST(SEMLIBS)
@@ -4314,11 +4448,14 @@ AC_SUBST(devddir)
 AC_SUBST(driverexecdir)
 AC_SUBST(freebsdquirksdir)
 AC_SUBST(htmldir)
+AC_SUBST(htmldocdir)
+AC_SUBST(htmlmandir)
 AC_SUBST(pkgconfigdir)
 AC_SUBST(systemdsystemunitdir)
 AC_SUBST(systemdshutdowndir)
 AC_SUBST(systemdtmpfilesdir)
 AC_SUBST(auglensdir)
+AC_SUBST(auglenstestsdir)
 AC_SUBST(hotplugdir)
 AC_SUBST(udevdir)
 
