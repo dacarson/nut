@@ -11,6 +11,8 @@
 
 # Generally, list headers and/or sources which are re-generated
 # for nut-scanner in the parent dir
+# Note there is also a libupsclient-version.h which we ensure and
+# manage via usual `make` dependencies below.
 NUT_SCANNER_DEPS_H = nutscan-usb.h nutscan-snmp.h
 NUT_SCANNER_DEPS_C =
 
@@ -28,6 +30,7 @@ $(NUT_SCANNER_DEPS): dummy
 
 # Make sure out-of-dir dependencies exist (especially when dev-building parts):
 $(top_builddir)/include/nut_version.h \
+$(top_builddir)/clients/libupsclient-version.h \
 $(top_builddir)/common/libnutwincompat.la \
 $(top_builddir)/drivers/libserial-nutscan.la \
 $(top_builddir)/common/libcommonstr.la \
@@ -39,6 +42,7 @@ $(top_builddir)/common/libcommon.la: dummy
 # BUILT_SOURCES (in ../include) will ensure nut_version.h will
 # be built before anything else
 nut-scanner.c: $(top_builddir)/include/nut_version.h
+nutscan-init.c: $(top_builddir)/clients/libupsclient-version.h
 
 # We optionally append values to this below
 bin_PROGRAMS =
@@ -75,6 +79,8 @@ if HAVE_WINDOWS
   libnutscan_la_LIBADD += $(top_builddir)/common/libnutwincompat.la
   libnutscan_la_LDFLAGS += -no-undefined
 endif HAVE_WINDOWS
+# Technically, we might only have this one set on Windows so far...
+libnutscan_la_LDFLAGS += @NETLIBS_GETADDRS@
 
 #
 # Below we set API versions of public libraries
@@ -83,7 +89,7 @@ endif HAVE_WINDOWS
 # object .so names would differ)
 #
 # libnutscan version information
-libnutscan_la_LDFLAGS += -version-info 2:5:1
+libnutscan_la_LDFLAGS += -version-info 2:6:0
 
 # libnutscan exported symbols regex
 # WARNING: Since the library includes parts of libcommon (as much as needed
@@ -94,14 +100,18 @@ libnutscan_la_LDFLAGS += -version-info 2:5:1
 # copies of "nut_debug_level" making fun of our debug-logging attempts.
 # One solution to tackle if needed for those cases would be to make some
 # dynamic/shared libnutcommon (etc.)
-libnutscan_la_LDFLAGS += -export-symbols-regex '^(nutscan_|nut_debug_level|s_upsdebugx|max_threads|curr_threads|nut_report_config_flags|upsdebugx_report_search_paths|nut_prepare_search_paths)'
-libnutscan_la_CFLAGS = -I$(top_srcdir)/clients -I$(top_srcdir)/include \
+libnutscan_la_LDFLAGS += -export-symbols-regex '^(nutscan_|nut_debug_level|s_upsdebug|fatalx|fatal_with_errno|xcalloc|snprintfcat|max_threads|curr_threads|nut_report_config_flags|upsdebugx_report_search_paths|nut_prepare_search_paths)'
+libnutscan_la_CFLAGS = \
+			-I$(top_builddir)/clients -I$(top_srcdir)/clients \
+			-I$(top_builddir)/include -I$(top_srcdir)/include \
 			$(LIBLTDL_CFLAGS) -I$(top_srcdir)/drivers
 
 libnutscan_la_LIBADD += $(top_builddir)/common/libcommonstr.la
 
 nut_scanner_SOURCES = nut-scanner.c
-nut_scanner_CFLAGS = -I$(top_srcdir)/clients -I$(top_srcdir)/include
+nut_scanner_CFLAGS = \
+			-I$(top_builddir)/clients -I$(top_srcdir)/clients \
+			-I$(top_builddir)/include -I$(top_srcdir)/include
 nut_scanner_LDADD = libnutscan.la
 
 if WITH_SSL
@@ -114,6 +124,9 @@ endif WITH_USB
 # Note: do not indent automake "if" lines
 if WITH_SNMP
   libnutscan_la_CFLAGS += $(LIBNETSNMP_CFLAGS)
+if !WITH_OPENSSL
+  libnutscan_la_CFLAGS += -UNETSNMP_USE_OPENSSL
+endif !WITH_OPENSSL
 if    WITH_SNMP_STATIC
     # MinGW builds of libnetsnmp are static-only, so we link it in:
     libnutscan_la_CFLAGS += -DWITH_SNMP_STATIC=1

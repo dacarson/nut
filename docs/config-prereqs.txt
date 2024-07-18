@@ -141,7 +141,7 @@ metadata about recently published package revisions:
 
 :; apt-get install \
     ccache time \
-    git python perl curl \
+    git perl curl \
     make autoconf automake libltdl-dev libtool \
     valgrind \
     cppcheck \
@@ -151,6 +151,10 @@ metadata about recently published package revisions:
 # NOTE: Older Debian-like distributions may lack a "libtool-bin"
 :; apt-get install \
     libtool-bin
+
+# See comments below, python version and package naming depends on distro
+:; apt-get install \
+    python
 
 # NOTE: For python, you may eventually have to specify a variant like this
 # (numbers depending on default or additional packages of your distro):
@@ -338,12 +342,16 @@ drivers in distro packaging of NUT. Resolution and doc PRs are welcome.
 :; yum install \
     ccache time \
     file \
-    git python perl curl \
+    git perl curl \
     make autoconf automake libtool-ltdl-devel libtool \
     valgrind \
     cppcheck \
     pkgconfig \
     gcc gcc-c++ clang
+
+# See comments below, python version and package naming depends on distro
+:; yum install \
+    python
 
 # NOTE: For python, you may eventually have to specify a variant like this
 # (numbers depending on default or additional packages of your distro):
@@ -688,12 +696,16 @@ below.
 
 ------
 :; pkg install \
-    git python perl5 curl \
+    git perl5 curl \
     gmake autoconf automake autotools libltdl libtool \
     valgrind \
     cppcheck \
     pkgconf \
     gcc clang
+
+# See comments below, python version and package naming depends on distro
+:; pkg install \
+    python
 
 # NOTE: For python, you may eventually have to specify a variant like this
 # (numbers depending on default or additional packages of your distro):
@@ -816,12 +828,16 @@ default site.
 :; pkg_add sudo bash mc wget rsync
 
 :; pkg_add \
-    git python curl \
+    git curl \
     gmake autoconf automake libltdl libtool \
     valgrind \
     cppcheck \
     pkgconf \
     gcc clang
+
+# See comments below, python version and package naming depends on distro
+:; pkg_add \
+    python
 
 # NOTE: For python, you may eventually have to specify a variant like this
 # (numbers depending on default or additional packages of your distro):
@@ -956,11 +972,15 @@ you can work around by `make MKDIRPROG="mkdir -p" install -j 8` for example.
 
 ------
 :; pkgin install \
-    git python27 python39 perl curl \
+    git perl curl \
     make gmake autoconf automake libltdl libtool \
     cppcheck \
     pkgconf \
     gcc7 clang
+
+# See comments below, python version and package naming depends on distro
+:; pkgin install \
+    python27 python39
 
 ;; ( cd /usr/pkg/bin && ( ln -fs python2.7 python2 ; ln -fs python3.9 python3 ) )
 # You can find a list of what is (pre-)installed with:
@@ -1341,7 +1361,10 @@ for compilers, and Homebrew community packaging for dependencies (including
 `bash` since the system one is too old for `ci_build.sh` script syntax).
 
 See `.travis.yml` and `.circleci/config.yml` for practical details of the
-setup.
+setup, and https://brew.sh if you want to install it on your MacOS system
+(note that its default packaged locations known as `HOMEBREW_PREFIX` differ
+depending on architecture -- see https://docs.brew.sh/Installation for more
+details; find via `brew config | grep HOMEBREW_PREFIX: | awk '{print $2}'`).
 
 Currently known dependencies for basic build include:
 ----
@@ -1349,17 +1372,35 @@ Currently known dependencies for basic build include:
 :; HOMEBREW_NO_AUTO_UPDATE=1; export HOMEBREW_NO_AUTO_UPDATE
 
 # Required:
-:; brew install ccache bash libtool pkg-config gd libusb neon net-snmp openssl
+:; brew install ccache bash libtool binutils autoconf automake git m4 \
+        pkg-config aspell asciidoc docbook-xsl cppunit gd \
+        libusb neon net-snmp \
+        nss openssl \
+        libmodbus freeipmi powerman
 ----
+
+NOTE: for `asciidoc`/`a2x` to work, you should `export XML_CATALOG_FILES` with
+the location of packaged resources (`${HOMEBREW_PREFIX}/etc/xml/catalog`).
+On one test system, man page builds spewed warnings like
+`<unknown>:1: SyntaxWarning: invalid escape sequence '\S'`
+but seemed to produce reasonable results otherwise.
 
 Note that ccache is installed in a different location than expected by default
 in the `ci_build.sh` script, so if your system allows to add the symbolic link
-to `/usr/local/opt/ccache/libexec` as `/usr/lib/ccache` -- please do so as the
-easiest way out. Alternatively, to prepare building sessions with `ci_build.sh`
-you can:
+to `/opt/homebrew/opt/ccache/libexec` (`/usr/local/opt/ccache/libexec` on x86)
+as `/usr/lib/ccache` -- please do so as the easiest way out.
+
+Alternatively, to prepare building sessions with `ci_build.sh` you can:
 ----
-:; export CI_CCACHE_SYMLINKDIR="/usr/local/opt/ccache/libexec"
+:; export CI_CCACHE_SYMLINKDIR="/opt/homebrew/opt/ccache/libexec"
+
+### ...or for x86 builders:
+#:; export CI_CCACHE_SYMLINKDIR="/usr/local/opt/ccache/libexec"
 ----
+
+NOTE: For Jenkins agents, also need to `brew install --cask temurin@21`
+for JRE/JDK 21. Java 17 or 21 (an LTS) is required to run Jenkins agents
+after summer 2024.
 
 
 Windows builds
