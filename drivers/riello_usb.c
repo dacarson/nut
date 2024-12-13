@@ -36,7 +36,7 @@
 #include "riello.h"
 
 #define DRIVER_NAME	"Riello USB driver"
-#define DRIVER_VERSION	"0.12"
+#define DRIVER_VERSION	"0.14"
 
 #define DEFAULT_OFFDELAY   5  /*!< seconds (max 0xFF) */
 #define DEFAULT_BOOTDELAY  5  /*!< seconds (max 0xFF) */
@@ -143,7 +143,7 @@ static int Send_USB_Packet(uint8_t *send_str, uint16_t numbytes)
 		err = usb_bulk_write(udev, 0x2, (usb_ctrl_charbuf) USB_buff_pom, 8, 1000);
 
 		if (err < 0) {
-			upsdebugx(3, "USB: Send_USB_Packet: send_usb_packet, err = %d %s ", err, strerror(errno));
+			upsdebug_with_errno(3, "USB: Send_USB_Packet: send_usb_packet, err = %d %s ", err, nut_usb_strerror(err));
 			return err;
 		}
 		ussleep(USB_WRITE_DELAY);
@@ -173,7 +173,7 @@ static int Send_USB_Packet(uint8_t *send_str, uint16_t numbytes)
 		err = usb_bulk_write(udev, 0x2, (usb_ctrl_charbuf) USB_buff_pom, 8, 1000);
 
 		if (err < 0) {
-			upsdebugx(3, "USB: Send_USB_Packet: send_usb_packet, err = %d %s ", err, strerror(errno));
+			upsdebug_with_errno(3, "USB: Send_USB_Packet: send_usb_packet, err = %d %s ", err, nut_usb_strerror(err));
 			return err;
 		}
 		ussleep(USB_WRITE_DELAY);
@@ -201,7 +201,7 @@ static int Get_USB_Packet(uint8_t *buffer)
 		upsdebugx(3, "read: %02X %02X %02X %02X %02X %02X %02X %02X", inBuf[0], inBuf[1], inBuf[2], inBuf[3], inBuf[4], inBuf[5], inBuf[6], inBuf[7]);
 
 	if (err < 0){
-		upsdebugx(3, "USB: Get_USB_Packet: send_usb_packet, err = %d %s ", err, strerror(errno));
+		upsdebug_with_errno(3, "USB: Get_USB_Packet: send_usb_packet, err = %d %s ", err, nut_usb_strerror(err));
 		return err;
 	}
 
@@ -1134,6 +1134,9 @@ void upsdrv_initinfo(void)
 
 void upsdrv_shutdown(void)
 {
+	/* Only implement "shutdown.default"; do not invoke
+	 * general handling of other `sdcommands` here */
+
 	/* tell the UPS to shut down, then return - DO NOT SLEEP HERE */
 	int retry;
 
@@ -1151,7 +1154,8 @@ void upsdrv_shutdown(void)
 	/* OB: the load must remain off until the power returns */
 
 	for (retry = 1; retry <= MAXTRIES; retry++) {
-
+		/* By default, abort a previously requested shutdown
+		 * (if any) and schedule a new one from this moment. */
 		if (riello_instcmd("shutdown.stop", NULL) != STAT_INSTCMD_HANDLED) {
 			continue;
 		}
@@ -1161,12 +1165,14 @@ void upsdrv_shutdown(void)
 		}
 
 		upslogx(LOG_ERR, "Shutting down");
-		set_exit_flag(-2);	/* EXIT_SUCCESS */
+		if (handling_upsdrv_shutdown > 0)
+			set_exit_flag(EF_EXIT_SUCCESS);
 		return;
 	}
 
 	upslogx(LOG_ERR, "Shutdown failed!");
-	set_exit_flag(-1);
+	if (handling_upsdrv_shutdown > 0)
+		set_exit_flag(EF_EXIT_FAILURE);
 }
 
 void upsdrv_updateinfo(void)

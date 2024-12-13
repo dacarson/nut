@@ -43,17 +43,17 @@
 
 #include <sys/types.h>
 #ifndef WIN32
-#include <sys/wait.h>
-#include <sys/socket.h>
-#include <sys/un.h>
-#include <netinet/in.h>
-#include <unistd.h>
-#include <fcntl.h>
-#include <poll.h>
+# include <sys/wait.h>
+# include <sys/socket.h>
+# include <sys/un.h>
+# include <netinet/in.h>
+# include <unistd.h>
+# include <fcntl.h>
+# include <poll.h>
 #else
-#include "wincompat.h"
-#include <winsock2.h>
-#include <ws2tcpip.h>
+# include "wincompat.h"
+# include <winsock2.h>
+# include <ws2tcpip.h>
 #endif
 
 #include "upssched.h"
@@ -75,7 +75,7 @@ static const	char	*upsname, *notify_type;
 
 #ifdef WIN32
 static OVERLAPPED connect_overlapped;
-#define BUF_LEN 512
+# define BUF_LEN 512
 #endif
 
 #define PARENT_STARTED		-2
@@ -286,6 +286,9 @@ static void us_serialize(int op)
 			ret = read(pipefd[0], &ch, 1);
 			close(pipefd[0]);
 			break;
+
+		default:
+			break;
 	}
 }
 #endif
@@ -361,7 +364,7 @@ static TYPE_FD open_sock(void)
 
 	/* Wait for a connection */
 	ConnectNamedPipe(fd,&connect_overlapped);
-#endif
+#endif /* WIN32 */
 
 	return fd;
 }
@@ -482,7 +485,7 @@ static int send_to_one(conn_t *conn, const char *fmt, ...)
 
 		return 0;	/* failed */
 	}
-#endif
+#endif /* WIN32 */
 
 	return 1;	/* OK */
 }
@@ -495,9 +498,9 @@ static TYPE_FD conn_add(TYPE_FD sockfd)
 	int	ret;
 	conn_t	*tmp, *last;
 	struct	sockaddr_un	saddr;
-#if defined(__hpux) && !defined(_XOPEN_SOURCE_EXTENDED)
+# if defined(__hpux) && !defined(_XOPEN_SOURCE_EXTENDED)
 	int			salen;
-#else
+# else
 	socklen_t	salen;
 #endif
 
@@ -625,7 +628,7 @@ static TYPE_FD conn_add(TYPE_FD sockfd)
 	upsdebugx(3, "new connection on handle %p", acc);
 
 	pconf_init(&conn->ctx, NULL);
-#endif
+#endif /* WIN32 */
 
 	return acc;
 }
@@ -689,8 +692,8 @@ static int sock_read(conn_t *conn)
 		ret = read(conn->fd, &ch, 1);
 
 		if (ret > 0)
-			upsdebugx(6, "read() from fd %d returned %" PRIiSIZE " (bytes): '%c'; errno=%d: %s",
-				conn->fd, ret, ch, errno, strerror(errno));
+			upsdebug_with_errno(6, "read() from fd %d returned %" PRIiSIZE " (bytes): '%c'",
+				conn->fd, ret, ch);
 
 		if (ret < 1) {
 
@@ -720,15 +723,13 @@ static int sock_read(conn_t *conn)
 				|| (poll(&pfd, 1, 0) <= 0)
 				||  errno
 				) {
-					upsdebugx(4, "read() from fd %d returned 0; errno=%d: %s",
-						conn->fd, errno, strerror(errno));
+					upsdebug_with_errno(4, "read() from fd %d returned 0", conn->fd);
 					return -1;	/* connection closed, probably */
 				}
 				if (i == (US_MAX_READ - 1)) {
-					upsdebugx(4, "read() from fd %d returned 0 "
+					upsdebug_with_errno(4, "read() from fd %d returned 0 "
 						"too many times in a row, aborting "
-						"sock_read(); errno=%d: %s",
-						conn->fd, errno, strerror(errno));
+						"sock_read()", conn->fd);
 					return -1;	/* connection closed, probably */
 				}
 				continue;
@@ -753,7 +754,8 @@ static int sock_read(conn_t *conn)
 		/* Restart async read */
 		memset(conn->buf,0,sizeof(conn->buf));
 		ReadFile(conn->fd,conn->buf,1,NULL,&(conn->read_overlapped));
-#endif
+#endif /* WIN32 */
+
 		ret = pconf_char(&conn->ctx, ch);
 
 		if (ret == 0)	/* nothing to parse yet */
@@ -779,10 +781,8 @@ static int sock_read(conn_t *conn)
 		return 1;	/* we did some work */
 	}
 
-	upsdebugx(6, "sock_read() from fd %d returned nothing "
-		"(maybe still collecting the command line); "
-		"errno=%d: %s",
-		conn->fd, errno, strerror(errno));
+	upsdebug_with_errno(6, "sock_read() from fd %d returned nothing "
+		"(maybe still collecting the command line); ", conn->fd);
 
 	return 0;	/* fell out without parsing anything */
 }
@@ -815,7 +815,7 @@ static void start_daemon(TYPE_FD lockfd)
 	/* child */
 
 	/* make fds 0-2 (typically) point somewhere defined */
-#ifdef HAVE_DUP2
+# ifdef HAVE_DUP2
 	/* system can close (if needed) and (re-)open a specific FD number */
 	if (1) { /* scoping */
 		TYPE_FD devnull = open("/dev/null", O_RDWR);
@@ -836,8 +836,8 @@ static void start_daemon(TYPE_FD lockfd)
 
 		close(devnull);
 	}
-#else
-# ifdef HAVE_DUP
+# else /* not HAVE_DUP2 */
+#  ifdef HAVE_DUP
 	/* opportunistically duplicate to the "lowest-available" FD number */
 	close(STDIN_FILENO);
 	if (open("/dev/null", O_RDWR) != STDIN_FILENO)
@@ -854,7 +854,7 @@ static void start_daemon(TYPE_FD lockfd)
 		if (dup(STDIN_FILENO) != STDERR_FILENO)
 			fatal_with_errno(EXIT_FAILURE, "dup /dev/null as STDERR");
 	}
-# else
+#  else /* not HAVE_DUP */
 	close(STDIN_FILENO);
 	if (open("/dev/null", O_RDWR) != STDIN_FILENO)
 		fatal_with_errno(EXIT_FAILURE, "re-open /dev/null as STDIN");
@@ -870,8 +870,8 @@ static void start_daemon(TYPE_FD lockfd)
 		if (open("/dev/null", O_RDWR) != STDERR_FILENO)
 			fatal_with_errno(EXIT_FAILURE, "re-open /dev/null as STDERR");
 	}
-# endif
-#endif
+#  endif /* not HAVE_DUP */
+# endif /* not HAVE_DUP2 */
 
 	pipefd = open_sock();
 
@@ -1048,7 +1048,7 @@ static void start_daemon(TYPE_FD lockfd)
 
 		checktimers();
 	}
-#endif
+#endif /* WIN32 */
 }
 
 /* --- 'client' functions --- */
@@ -1100,7 +1100,7 @@ static TYPE_FD try_connect(void)
 	if (VALID_FD(pipefd))
 		return pipefd;
 
-#endif
+#endif /* WIN32 */
 
 	return ERROR_FD;
 }
@@ -1237,7 +1237,7 @@ static void sendcmd(const char *cmd, const char *arg1, const char *arg2)
 			switch(ret_s) {
 				/* select error */
 				case -1:
-					upslogx(LOG_DEBUG, "parent select error: %s", strerror(errno));
+					upslog_with_errno(LOG_DEBUG, "parent select error");
 					break;
 
 				/* nothing to read */
@@ -1289,7 +1289,7 @@ static void sendcmd(const char *cmd, const char *arg1, const char *arg2)
 			CloseHandle(pipefd);
 			continue;
 		}
-#endif
+#endif /* WIN32 */
 
 		if (!strncmp(buf, "OK", 2))
 			return;		/* success */
@@ -1530,6 +1530,11 @@ int main(int argc, char **argv)
 				/* just show the optional CONFIG_FLAGS banner */
 				nut_report_config_flags();
 				exit(EXIT_SUCCESS);
+
+			default:
+				fatalx(EXIT_FAILURE,
+					"Error: unknown option -%c. Try -h for help.",
+					(char)i);
 		}
 	}
 

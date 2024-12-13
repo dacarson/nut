@@ -54,10 +54,14 @@ endif
 NUTSW_DRIVERLIST = dummy-ups clone clone-outlet apcupsd-ups skel
 SERIAL_DRIVERLIST = al175 bcmxcp belkin belkinunv bestfcom	\
  bestfortress bestuferrups bestups etapro everups 	\
- gamatronic genericups isbmex liebert liebert-esp2 masterguard metasys	\
- mge-utalk microdowell microsol-apc mge-shut oneac optiups powercom rhino 	\
+ gamatronic genericups isbmex liebert liebert-esp2 liebert-gxe masterguard metasys	\
+ mge-utalk microdowell microsol-apc mge-shut oneac optiups powercom rhino	\
  safenet nutdrv_siemens-sitop solis tripplite tripplitesu upscode2 victronups powerpanel \
  blazer_ser ivtscd apcsmart apcsmart-old riello_ser sms_ser bicker_ser
+if HAVE_LINUX_SERIAL_H
+# Temporary, until ported to more OSes
+SERIAL_DRIVERLIST += nhs_ser
+endif HAVE_LINUX_SERIAL_H
 SNMP_DRIVERLIST = snmp-ups
 USB_LIBUSB_DRIVERLIST = usbhid-ups bcmxcp_usb tripplite_usb \
  blazer_usb richcomm_usb riello_usb \
@@ -157,6 +161,7 @@ isbmex_LDADD = $(LDADD) -lm
 ivtscd_SOURCES = ivtscd.c
 liebert_SOURCES = liebert.c
 liebert_esp2_SOURCES = liebert-esp2.c
+liebert_gxe_SOURCES = liebert-gxe.c
 masterguard_SOURCES = masterguard.c
 metasys_SOURCES = metasys.c
 metasys_LDADD = $(LDADD) -lm
@@ -164,6 +169,8 @@ mge_utalk_SOURCES = mge-utalk.c
 microdowell_SOURCES = microdowell.c
 microsol_apc_SOURCES = microsol-apc.c microsol-common.c
 microsol_apc_LDADD = $(LDADD) -lm
+nhs_ser_SOURCES = nhs_ser.c
+nhs_ser_LDADD = $(LDADD) -lm
 oneac_SOURCES = oneac.c
 optiups_SOURCES = optiups.c
 powercom_SOURCES = powercom.c
@@ -195,9 +202,11 @@ bicker_ser_LDADD = $(LDADD) -lm
 dummy_ups_SOURCES = dummy-ups.c
 dummy_ups_CFLAGS = $(AM_CFLAGS) -I$(top_srcdir)/clients
 dummy_ups_LDADD = $(LDADD_DRIVERS) $(top_builddir)/clients/libupsclient.la
+dummy_ups_LDFLAGS = $(AM_LDFLAGS)
 if WITH_SSL
   dummy_ups_CFLAGS += $(LIBSSL_CFLAGS)
   dummy_ups_LDADD += $(LIBSSL_LIBS)
+  dummy_ups_LDFLAGS += $(LIBSSL_LDFLAGS_RPATH)
 endif
 
 # Clone drivers (in NUTSW_DRIVERLIST)
@@ -274,6 +283,7 @@ snmp_ups_SOURCES = snmp-ups.c snmp-ups-helpers.c \
 snmp_ups_CFLAGS = $(AM_CFLAGS)
 snmp_ups_CFLAGS += $(LIBNETSNMP_CFLAGS)
 snmp_ups_LDADD = $(LDADD_DRIVERS) $(LIBNETSNMP_LIBS) -lm
+snmp_ups_LDFLAGS = $(AM_LDFLAGS)
 
 if WITH_SSL
 if !WITH_OPENSSL
@@ -281,16 +291,19 @@ if !WITH_OPENSSL
 endif !WITH_OPENSSL
   snmp_ups_CFLAGS += $(LIBSSL_CFLAGS)
   snmp_ups_LDADD += $(LIBSSL_LIBS)
+  snmp_ups_LDFLAGS += $(LIBSSL_LDFLAGS_RPATH)
 endif WITH_SSL
 
 # NEON XML/HTTP
 netxml_ups_SOURCES = netxml-ups.c mge-xml.c
 netxml_ups_LDADD = $(LDADD_DRIVERS) $(LIBNEON_LIBS)
 netxml_ups_CFLAGS = $(AM_CFLAGS)
+netxml_ups_LDFLAGS = $(AM_LDFLAGS)
 
 if WITH_SSL
   netxml_ups_CFLAGS += $(LIBSSL_CFLAGS)
   netxml_ups_LDADD += $(LIBSSL_LIBS)
+  netxml_ups_LDFLAGS += $(LIBSSL_LDFLAGS_RPATH)
 endif
 
 # Powerman
@@ -401,7 +414,7 @@ dist_noinst_HEADERS = \
  xppc-mib.h huawei-mib.h eaton-ats16-nmc-mib.h eaton-ats16-nm2-mib.h apc-ats-mib.h raritan-px2-mib.h eaton-ats30-mib.h \
  apc-pdu-mib.h apc-epdu-mib.h ever-hid.h eaton-pdu-genesis2-mib.h eaton-pdu-marlin-mib.h eaton-pdu-marlin-helpers.h \
  eaton-pdu-pulizzi-mib.h eaton-pdu-revelation-mib.h emerson-avocent-pdu-mib.h eaton-ups-pwnm2-mib.h eaton-ups-pxg-mib.h legrand-hid.h \
- hpe-pdu-mib.h hpe-pdu3-cis-mib.h powervar-hid.h delta_ups-hid.h generic_modbus.h salicru-hid.h adelsystem_cbi.h eaton-pdu-nlogic-mib.h
+ hpe-pdu-mib.h hpe-pdu3-cis-mib.h powervar-hid.h delta_ups-hid.h generic_modbus.h salicru-hid.h adelsystem_cbi.h eaton-pdu-nlogic-mib.h ydn23.h
 
 # Define a dummy library so that Automake builds rules for the
 # corresponding object files.  This library is not actually built,

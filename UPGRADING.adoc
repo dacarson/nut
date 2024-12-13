@@ -26,17 +26,73 @@ Changes from 2.8.2 to 2.8.3
 
 - PLANNED: Keep track of any further API clean-up?
 
+- NUT development snapshots can now have more version components than the
+  standard semantic versioning triplet, optionally adding the amount of
+  commits on the development trunk since previous release, and the amount
+  of commits on a feature branch that are unique to it.  Release artifacts
+  that have zeroes in both positions would have them stripped and still
+  have the standard "semver" exposed, but the development snapshots can
+  now be more reasonably upgraded with automated tooling. A copy of the
+  current version information would be embedded into "dist" archives as
+  a `VERSION_DEFAULT` file, so it can be used without git. Certain distros
+  can benefit from a `VERSION_FORCED` file or a `NUT_VERSION_FORCED`
+  environment variable exported from their build system, e.g. via
+  `echo NUT_VERSION_FORCED=1.1.1 > VERSION_FORCED`. Unfortunately, some
+  appliances tag all software the same with their firmware version;
+  if this is required, a (NUT_)VERSION_FORCED_SEMVER envvar or file can
+  help identify the actual NUT release version triplet used on the box.
+  Please use it, it immensely helps with community troubleshooting!
+  [issue #1949]
+
+- `upsmon` should now integrate natively with systemd-driven OS sleep events
+  (built with systemd version 221 or newer "inhibitor interface"), so various
+  hacks previously packaged into `/usr/lib/systemd/system-sleep/` scripts or
+  units requiring/conflicting with the `sleep.target` may be obsolete.
+  For fallback with older systemd, a `nut-sleep.service` is provided now.
+  [#1070, #2596, #2597]
+
+- Handling of per-UPS `ALARM` state was introduced to `upsmon`, allowing it
+  to optionally treat it as a factor in deciding that the device is in a
+  "critical" state (polled more often, assumed dead if communications are
+  lost). Since it is up to devices and their NUT drivers what they would
+  raise as an alarm (might be something as mundane as ECO mode being active),
+  some alarms can contribute to unwanted/early shutdowns. For this reason
+  a `0|1` setting `ALARMCRITICAL` was introduced into `upsmon.conf` (default
+  is `1`), for such users to be able to prevent their `upsmon` from treating
+  the `ALARM` status as overly severe when it is not in fact. [#2658, #415]
+
+- `usbhid-ups` and `netxml-ups` updated to handle "No battery installed!"
+  alarm also to set the `RB` (Replace Battery) value in `ups.status`.
+  This may cause dual triggering of notifications (as an `ALARM` generally
+  and as an important `REPLBATT` status in particular) in `upsmon`, but
+  better safe than sorry. [#415]
+
 - `usbhid-ups` subdriver `PowerCOM HID` subdriver sent UPS `shutdown` and
   `stayoff` commands in wrong byte order, at least for devices currently
   in the field. Driver now sends the commands in a way that satisfies new
   devices; just in case a flag toggle `powercom_sdcmd_byte_order_fallback`
   was added to set the old behavior (if some devices do need it). [PR #2480]
 
+- Added support for `lbrb_log_delay_sec=N` setting to delay propagation of
+  `LB` or `LB+RB` state (buggy with APC BXnnnnMI devices/firmwares issued
+  circa 2023-2024 which flood the logs with spurious LOWBATT and REPLACEBATT
+  events). This may work better for some devices when combined with flags
+  like `onlinedischarge_calibration` and `lbrb_log_delay_without_calibrating`.
+  [#2347]
+
 - Enabled installation of built PDF and HTML (including man page renditions)
   files under the configured `docdir`. It seems previously they were only
   built (if requested) but not installed via `make`, unlike the common man
   pages which are delivered automatically. Packaging recipes can likely
   be simplified now. [#2445]
+
+- A `NUT_DEBUG_SYSLOG` environment variable was introduced to tweak activation
+  of syslog message emission (and related detachment of `stderr` when daemons
+  are backgrounding), which can be useful for systemd service units. It can be
+  set via `nut.conf` file for all standard consumers, or patched/dropped-in to
+  systemd unit definitions specifically (less recommended, but may be easier
+  to package). The positive effect would be avoiding duplicate logging as both
+  `syslog` and `stderr` ending up in the same journal. [#2394]
 
 - A `CHANGELOG_REQUIRE_GROUP_BY_DATE_AUTHOR` setting was added (for `make`
   calls and used by `tools/gitlog2changelog.py.in` script), and it defaults
@@ -73,6 +129,32 @@ Changes from 2.8.2 to 2.8.3
   variable support was added to optionally disable this verification.
   Also the NUT daemons should request to double-check against their
   run-time process name (if it can be detected). [issue #2463]
+
+- More environment variable support was added to NUT programs, primarily
+  aimed at wrappers such as init scripts and service unit definitions,
+  allowing to tweak what (and whether) they write into debug traces, and
+  so "make noise" or "bring invaluable insights" to logs or terminal;
+  they can generally be used for services and init scripts via `nut.conf`:
+  * See `NUT_IGNORE_CHECKPROCNAME` and `NUT_DEBUG_SYSLOG` above. [#1915]
+  * A `NUT_QUIET_INIT_BANNER` envvar (presence or "true" value) prevents
+    tool name and NUT version banner from being printed out when programs
+    start. [issues #1789 vs. #316]
+
+- A `configure` script option to build `--with-modbus+usb` was added to
+  let the caller insist on the use of USB-capable libmodbus (or fail the
+  NUT build attempt). Certain build arguments can default this option to
+  become enabled (implicitly): `configure --with-modbus --with-usb` and
+  either `--with-drivers=*apc_modbus*` (actually implies `--with-modbus`)
+  or `--with-modbus-includes=... --with-modbus-libs=...`
+  as a way to avoid surprises with custom NUT builds aiming to have an
+  USB-capable `apc_modbus` driver (currently this requires a custom-built
+  libmodbus, can be a static build to avoid conflicts with OS). [#2666]
+
+- A `configure` script option to `--enable-NUT_STRARG-always` was added
+  to enable the `NUT_STRARG` macro (to handle `NULL` string printing)
+  even if system libraries seem to safely support this behavior natively.
+  This should primarily help against overly zealous static analysis tools
+  in recent compiler generations. [#2585]
 
 
 Changes from 2.8.1 to 2.8.2

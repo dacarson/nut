@@ -487,7 +487,8 @@ SRC_SERIAL_PAGES = \
 	bicker_ser.txt	\
 	blazer-common.txt	\
 	blazer_ser.txt	\
-	clone.txt \
+	clone.txt	\
+	clone-outlet.txt	\
 	dummy-ups.txt	\
 	etapro.txt	\
 	everups.txt	\
@@ -496,6 +497,7 @@ SRC_SERIAL_PAGES = \
 	isbmex.txt	\
 	ivtscd.txt	\
 	liebert.txt	\
+	liebert-gxe.txt	\
 	liebert-esp2.txt	\
 	masterguard.txt	\
 	metasys.txt	\
@@ -519,6 +521,12 @@ SRC_SERIAL_PAGES = \
 	victronups.txt	\
 	apcupsd-ups.txt
 
+if HAVE_LINUX_SERIAL_H
+# Temporary, until ported to more OSes
+SRC_SERIAL_PAGES += \
+	nhs_ser.txt
+endif HAVE_LINUX_SERIAL_H
+
 if ! SOME_DRIVERS
 if WITH_MANS
 MAN_SERIAL_PAGES = \
@@ -534,7 +542,8 @@ MAN_SERIAL_PAGES = \
 	bestfcom.8	\
 	bicker_ser.8	\
 	blazer_ser.8	\
-	clone.8 \
+	clone.8	\
+	clone-outlet.8	\
 	dummy-ups.8	\
 	etapro.8	\
 	everups.8	\
@@ -543,6 +552,7 @@ MAN_SERIAL_PAGES = \
 	isbmex.8	\
 	ivtscd.8	\
 	liebert.8	\
+	liebert-gxe.8	\
 	liebert-esp2.8	\
 	masterguard.8	\
 	metasys.8	\
@@ -565,7 +575,15 @@ MAN_SERIAL_PAGES = \
 	upscode2.8	\
 	victronups.8	\
 	apcupsd-ups.8
+
+if HAVE_LINUX_SERIAL_H
+# Temporary, until ported to more OSes
+MAN_SERIAL_PAGES += \
+	nhs_ser.8
+endif HAVE_LINUX_SERIAL_H
+
 endif WITH_MANS
+
 
 if WITH_SERIAL
 man8_MANS +=  $(MAN_SERIAL_PAGES)
@@ -584,7 +602,8 @@ HTML_SERIAL_MANS = \
 	bestfcom.html	\
 	bicker_ser.html	\
 	blazer_ser.html	\
-	clone.html \
+	clone.html	\
+	clone-outlet.html	\
 	dummy-ups.html	\
 	etapro.html	\
 	everups.html	\
@@ -593,6 +612,7 @@ HTML_SERIAL_MANS = \
 	isbmex.html	\
 	ivtscd.html	\
 	liebert.html	\
+	liebert-gxe.html\
 	liebert-esp2.html	\
 	masterguard.html	\
 	metasys.html	\
@@ -615,6 +635,13 @@ HTML_SERIAL_MANS = \
 	upscode2.html	\
 	victronups.html	\
 	apcupsd-ups.html
+
+if HAVE_LINUX_SERIAL_H
+# Temporary, until ported to more OSes
+HTML_SERIAL_MANS += \
+	nhs_ser.html
+endif HAVE_LINUX_SERIAL_H
+
 endif ! SOME_DRIVERS
 
 # (--with-snmp)

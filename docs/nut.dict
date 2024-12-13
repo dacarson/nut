@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3191 utf-8
+personal_ws-1.1 en 3264 utf-8
 AAC
 AAS
 ABI
@@ -22,6 +22,7 @@ AES
 AFE
 AGM
 AIX
+ALARMCRITICAL
 ALTROOT
 AMETEK
 APC's
@@ -46,6 +47,7 @@ Ablerex
 AcceptEnv
 ActivePower
 AdMiN
+Adoptium
 Affero
 Agrain
 Albanese
@@ -100,6 +102,7 @@ BTS
 BTV
 BUFRD
 BUZ
+BXnnnnMI
 BYP
 BZ
 BZOFF
@@ -126,6 +129,7 @@ BlackOut
 BladeUPS
 BlueOcean
 Bo
+Bocchi
 Bohe
 Borns
 Borri
@@ -207,6 +211,7 @@ CodingStyle
 Collver
 Colombier
 Comfo
+CommandLineTools
 ConfigVoltage
 ConnectUPS
 Corbelli
@@ -261,6 +266,8 @@ DTE
 DTrace
 DUMPALL
 DUMPDONE
+DUMPSTATUS
+DUMPVALUE
 DWAKE
 DWITH
 DX
@@ -304,10 +311,12 @@ EL
 ELCD
 EMI
 EMP
+EMPDT
 ENDFOR
 ENV
 EOC
 EOF
+EOL
 EOLed
 EPEL
 EPERM
@@ -315,6 +324,7 @@ EPFCLCD
 EPO
 EPS
 ESC
+ESS
 ESV
 ESXi
 ETIME
@@ -329,6 +339,7 @@ Effekta
 Egys
 Ekkehard
 Electrys
+Eletronicos
 Elio
 Elizarov
 Eltek
@@ -390,6 +401,7 @@ GC
 GCCVER
 GES
 GETADDRINFO
+GETPID
 GID
 GND
 GNUmakefile
@@ -595,6 +607,7 @@ LOADPCT
 LOCKFN
 LOCKNAME
 LOTRANS
+LTDA
 LTS
 LUA
 LVM
@@ -634,6 +647,7 @@ MDigest
 MEC
 MEGATAEC
 MERCHANTABILITY
+MF
 MH
 MIBs
 MIMode
@@ -671,6 +685,7 @@ Martinezgarza
 Martín
 Marzouk
 Massimo
+Masterpower
 Matthijs
 MaxLinear
 McKinnon
@@ -731,13 +746,16 @@ NONBLOCK
 NONUT
 NOP
 NOPARENT
+NOTALARM
 NOTBYPASS
 NOTCAL
+NOTECO
 NOTIFYCMD
 NOTIFYFLAG
 NOTIFYFLAGS
 NOTIFYMSG
 NOTOFF
+NOTOTHER
 NQA
 NTP
 NUT's
@@ -763,6 +781,7 @@ Neus
 Niels
 Niklas
 Niro
+Nobreak
 Nobreaks
 Nom
 NotePad
@@ -976,6 +995,7 @@ README
 REALPATH
 REDi
 REFREPO
+REPLACEBATT
 REPLBATT
 REQSSL
 RETPCT
@@ -988,6 +1008,7 @@ RMXL
 RNF
 RNG
 ROF
+RPATH
 RPC
 RPMdrake
 RPT
@@ -1101,6 +1122,7 @@ STI
 STIME
 STO
 STP
+STRARG
 SUNWlibusbugen
 SUNWugen
 SUNWusb
@@ -1146,6 +1168,8 @@ Sistem
 Sistemas
 SlackPack
 Slackware
+SlaveComputer
+SlaveVersion
 SmartBoost
 SmartNUT
 SmartOnline
@@ -1173,6 +1197,7 @@ Stanislav
 StatePath
 Stefano
 Stimits
+StrangeOS
 SuSE
 Suatoni
 Sublicensing
@@ -1197,6 +1222,7 @@ TCIOFLUSH
 TCSANOW
 TEMPC
 TEMPF
+TESTPASS
 TGS
 TIMELEFT
 TIOCM
@@ -1222,6 +1248,7 @@ Technorama
 Tecnoware
 Tefft
 Telecom
+Temurin
 Teurlings
 Thanos
 Thecus
@@ -1347,6 +1374,7 @@ Waldie
 WantedBy
 WatchdogSec
 Waveshare
+Wcovered
 WebFreak
 Werror
 Weverything
@@ -1354,15 +1382,18 @@ Wextra
 WhizBang
 WiX
 Wikipedia
+Willian
 WinMerge
 WinNUT
 WinPower
 Wireshark
 Wl
 Wrede
+Wunreachable
 XAU
 XC
 XCP
+XCode
 XLA
 XOFF
 XON
@@ -1380,6 +1411,7 @@ Xfer
 Xlinker
 Xpert
 Xups
+YDN
 YQ
 YV
 YY
@@ -1396,6 +1428,7 @@ Zaika
 Zampieri
 Zawadzki
 ZeroMQ
+Zhile
 abandonware
 abcd
 ablerex
@@ -1562,6 +1595,7 @@ bitmask
 bitness
 bitnesses
 bn
+bool
 boolean
 bootable
 bp
@@ -1586,10 +1620,13 @@ bullseye
 busport
 busybox
 bv
+bypassOff
+bypassOn
 cStandard
 cablepower
 calloc
 cb
+cbe
 cbi
 cbl
 ccache
@@ -1597,6 +1634,7 @@ cd
 cdc
 cdf
 cee
+cef
 centos
 cerr
 certfile
@@ -1681,6 +1719,7 @@ cpqpower
 cpsups
 cr
 crestfactor
+crit
 criticality
 crlf
 cron
@@ -1747,6 +1786,7 @@ desc
 deschis
 descr
 desde
+designator
 dev
 devctl
 devd
@@ -1820,6 +1860,7 @@ ePDUs
 eaton
 ec
 eco
+ecomode
 edb
 editorconfig
 edl
@@ -1848,6 +1889,7 @@ epdu
 eq
 errno
 esac
+essmode
 esupssmart
 et
 etapro
@@ -1859,6 +1901,7 @@ everyone's
 everything's
 evilhack
 exe
+execfuse
 executables
 executeCommand
 execve
@@ -1868,6 +1911,7 @@ extradata
 fabula
 facto
 fallthrough
+fasttrack
 fatalx
 fc
 fcb
@@ -1942,6 +1986,7 @@ getopt
 gettext
 gettextize
 getvar
+gif
 gitcache
 github
 gitignore
@@ -1949,8 +1994,10 @@ gitk
 gitlab
 gmail
 gmake
+gmtime
 gnuplot
 gnutls
+goodspeed
 google
 goto
 gotos
@@ -1968,6 +2015,7 @@ guesstimation
 guez
 gufw
 gui
+gxe
 gz
 gzip
 hal
@@ -1997,14 +2045,17 @@ hpe
 hpux
 href
 htaccess
+htm
 html
 htmlpath
 http
 httpd
 https
 huawei
+hudson
 hunnox
 hwdb
+hwinfo
 hwmon
 hwmonX
 hypervisor
@@ -2138,6 +2189,7 @@ labcd
 lan
 langid
 lasaine
+lbrb
 ld
 ldd
 le
@@ -2212,6 +2264,7 @@ lifecycle
 linevoltage
 linkdoc
 linksingledoc
+linksrcdoc
 linux
 linuxdoc
 lipo
@@ -2263,6 +2316,7 @@ mDNS
 mS
 macaddr
 macosx
+mailo
 mailx
 mainFrame
 maintainer's
@@ -2360,6 +2414,9 @@ mysecurityname
 myups
 myupsname
 nLogic
+nMONITOR
+nPOWERDOWNFLAG
+nSHUTDOWNCMD
 nabcd
 nameserver
 namespace
@@ -2388,6 +2445,7 @@ newvictronups
 nf
 ng
 nhnl
+nhs
 nielchiano
 nitram
 nl
@@ -2399,6 +2457,7 @@ nn
 nnn
 noAuthNoPriv
 nobody's
+nobreak
 nobt
 nodev
 nodownload
@@ -2426,11 +2485,13 @@ novendor
 nowait
 nowarn
 np
+nspr
 nss
 nuget
 num
 numOfBytesFromUPS
 numa
+numbatteries
 numlogins
 numq
 nutclient
@@ -2441,6 +2502,7 @@ nutdevN
 nutdrv
 nutmon
 nutscan
+nutshutdown
 nutsrv
 nutupsdrv
 nutvalue
@@ -2510,6 +2572,7 @@ pe
 peasy
 peername
 pem
+perc
 perl
 pfSense
 pfexec
@@ -2703,6 +2766,7 @@ screenshots
 scriptname
 sd
 sdcmd
+sdcommands
 sddelay
 sdk
 sdl
@@ -2718,12 +2782,14 @@ securityLevel
 securityName
 sed
 selftest
+semver
 sendback
 sendline
 sendmail
 sendsignal
 sendsignalfn
 sendsignalpid
+senoidal
 sequentialized
 ser
 seria
@@ -2745,6 +2811,7 @@ sfr
 sgml
 sgs
 sha
+shellenv
 shm
 shutdownArguments
 shutdowncmd
@@ -2837,6 +2904,7 @@ strerror
 strftime
 stringify
 strlen
+strncpy
 strnlen
 strptime
 struct
@@ -2862,6 +2930,7 @@ subnet
 subnets
 subtree
 sudo
+suggestsrcdoc
 suid
 suppressions
 suseconds
@@ -2922,6 +2991,7 @@ timehead
 timername
 timestamp
 timeticks
+timeval
 tios
 tmp
 tmpfiles
@@ -3020,6 +3090,7 @@ upsdebugx
 upsdev
 upsdrv
 upsdrvctl
+upsdrvquery
 upsdrvsvcctl
 upserror
 upsfetch
@@ -3035,6 +3106,7 @@ upslogx
 upsmon
 upsmon's
 upsname
+upsnotify
 upsonbatt
 upspass
 upspasswd
@@ -3090,6 +3162,7 @@ variadic
 varlow
 varname
 varvalue
+vbat
 vbatt
 vc
 vendorid

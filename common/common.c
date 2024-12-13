@@ -43,6 +43,390 @@
 # include <sys/stat.h>
 #endif
 
+#if (defined WITH_LIBSYSTEMD_INHIBITOR) && (defined WITH_LIBSYSTEMD && WITH_LIBSYSTEMD) && (defined WITH_LIBSYSTEMD_INHIBITOR && WITH_LIBSYSTEMD_INHIBITOR) && !(defined(WITHOUT_LIBSYSTEMD) && (WITHOUT_LIBSYSTEMD))
+#  ifdef HAVE_SYSTEMD_SD_BUS_H
+#   include <systemd/sd-bus.h>
+#  endif
+/* Code below is inspired by https://systemd.io/INHIBITOR_LOCKS/ docs, and
+ * https://github.com/systemd/systemd/issues/34004 discussion which pointed
+ * to https://github.com/systemd/systemd/blob/main/src/login/inhibit.c tool
+ * and https://github.com/systemd/systemd/blob/main/src/basic/errno-util.h etc.
+ * and https://www.freedesktop.org/software/systemd/man/latest/sd_bus_call_method.html
+ */
+static int RET_NERRNO(int ret) {
+	if (ret < 0) {
+		if (errno > 0)
+			return -EINVAL;
+		return -errno;
+	}
+
+	return ret;
+}
+
+/* FIXME: Pedantically speaking, the attribute is assumed supported by GCC
+ *  and CLANG; practically - not sure if we have platforms with sufficiently
+ *  new libsystemd (its headers and example code also use this) and older or
+ *  different compilers. This can be addressed a bit more clumsily directly,
+ *  but we only want to do so if needed in real life. */
+#define _cleanup_(f)	__attribute__((cleanup(f)))
+
+/* The "bus_login_mgr" definition per
+ * https://github.com/systemd/systemd/blob/4cf7a676af9a79ff418227d8ff488dfca6f243ab/src/shared/bus-locator.c#L24 */
+#define SDBUS_DEST	"org.freedesktop.login1"
+#define SDBUS_PATH	"/org/freedesktop/login1"
+#define SDBUS_IFACE	"org.freedesktop.login1.Manager"
+
+static /*_cleanup_(sd_bus_flush_close_unrefp)*/ sd_bus	*systemd_bus = NULL;
+static int	isSupported_Inhibit = -1, isSupported_Inhibit_errno = 0;
+static int	isSupported_PreparingForSleep = -1, isSupported_PreparingForSleep_errno = 0;
+
+static void close_sdbus_once(void) {
+	/* Per https://manpages.debian.org/testing/libsystemd-dev/sd_bus_flush_close_unrefp.3.en.html
+	 * these end-of-life methods do not tell us if we succeeded or failed
+	 * closing the bus connection in any manner, so we here also do not.
+	 */
+
+	if (!systemd_bus) {
+		errno = 0;
+		return;
+	}
+
+	upsdebugx(1, "%s: trying", __func__);
+	errno = 0;
+	sd_bus_flush_close_unrefp(&systemd_bus);
+	systemd_bus = NULL;
+}
+
+static int open_sdbus_once(const char *caller) {
+	static int	openedOnce = 0, faultReported = 0;
+	int	r = 1;
+
+	errno = 0;
+	if (systemd_bus)
+		return r;
+
+# if defined HAVE_SD_BUS_OPEN_SYSTEM_WITH_DESCRIPTION && HAVE_SD_BUS_OPEN_SYSTEM_WITH_DESCRIPTION
+	r = sd_bus_open_system_with_description(&systemd_bus, "Bus connection for Network UPS Tools sleep/suspend/hibernate handling");
+# else
+	r = sd_bus_open_system(&systemd_bus);
+# endif
+	if (r < 0 || !systemd_bus) {
+		if (r >= 0) {
+			if (!faultReported)
+				upsdebugx(1, "%s: Failed to acquire bus for %s(): "
+					"got null pointer and %d exit-code; setting EINVAL",
+					__func__, NUT_STRARG(caller), r);
+			r = -EINVAL;
+		} else {
+			if (!faultReported)
+				upsdebugx(1, "%s: Failed to acquire bus for %s() (%d): %s",
+					__func__, NUT_STRARG(caller), r, strerror(-r));
+		}
+		faultReported = 1;
+	} else {
+		upsdebugx(1, "%s: succeeded for %s", __func__, NUT_STRARG(caller));
+		faultReported = 0;
+	}
+
+	if (systemd_bus && !openedOnce) {
+		openedOnce = 1;
+		atexit(close_sdbus_once);
+	}
+
+	if (systemd_bus) {
+# if !(defined HAVE_SD_BUS_OPEN_SYSTEM_WITH_DESCRIPTION && HAVE_SD_BUS_OPEN_SYSTEM_WITH_DESCRIPTION)
+#  if defined HAVE_SD_BUS_SET_DESCRIPTION && HAVE_SD_BUS_SET_DESCRIPTION
+		if (sd_bus_set_description(systemd_bus, "Bus connection for Network UPS Tools sleep/suspend/hibernate handling") < 0)
+			upsdebugx(1, "%s: failed to sd_bus_set_description(), oh well", __func__);
+#  endif
+# endif
+
+		/* second arg for (bool)arg_ask_password - 0 for the non-interactive daemon */
+		sd_bus_set_allow_interactive_authorization(systemd_bus, 0);
+	}
+
+	return r;
+}
+
+static int would_reopen_sdbus(int r) {
+	if (r >= 0)
+		return 0;
+
+	switch (-r) {
+		/* Rule out issues that would not clear themselves (e.g. not stale connections) */
+		case ENOENT:
+		case EPERM:
+		case EACCES:
+			return 0;
+	}
+
+	return 1;
+}
+
+static int reopen_sdbus_once(int r, const char *caller, const char *purpose)
+{
+	if (r >= 0)
+		return r;
+
+	switch (-r) {
+		/* Rule out issues that would not clear themselves (e.g. not stale connections) */
+		case ENOENT:
+		case EPERM:
+		case EACCES:
+			break;
+
+		/* An "Invalid request descriptor" might fit this bill */
+		default:
+			upsdebugx(1, "%s for %s() for %s failed (%d) once, will retry D-Bus connection: %s",
+				__func__, caller, purpose, r, strerror(-r));
+
+			close_sdbus_once();
+			r = open_sdbus_once(caller);
+			if (r < 0) {
+				/* Errors, if any, reported above */
+				return r;
+			}
+			break;
+	}
+
+	return r;
+}
+
+int isInhibitSupported(void)
+{
+	return isSupported_Inhibit;
+}
+
+int isPreparingForSleepSupported(void)
+{
+	return isSupported_PreparingForSleep;
+}
+
+TYPE_FD Inhibit(const char *arg_what, const char *arg_who, const char *arg_why, const char *arg_mode)
+{
+	_cleanup_(sd_bus_error_free) sd_bus_error	error = SD_BUS_ERROR_NULL;
+	_cleanup_(sd_bus_message_unrefp) sd_bus_message	*reply = NULL;
+	int	r;
+	TYPE_FD	fd = ERROR_FD;
+
+	if (isSupported_Inhibit == 0) {
+		/* Already determined that we can not use it, e.g. due to perms */
+		errno = isSupported_Inhibit_errno;
+		return -errno;
+	}
+
+	/* Not found in public headers:
+	bool	arg_ask_password = true;
+	(void) polkit_agent_open_if_enabled(BUS_TRANSPORT_LOCAL, arg_ask_password);
+	 */
+
+	r = open_sdbus_once(__func__);
+	if (r < 0) {
+		/* Errors, if any, reported above */
+		return r;
+	}
+
+	r = sd_bus_call_method(systemd_bus, SDBUS_DEST, SDBUS_PATH, SDBUS_IFACE, "Inhibit", &error, &reply, "ssss", arg_what, arg_who, arg_why, arg_mode);
+	if (r < 0) {
+		if (would_reopen_sdbus(r)) {
+			if ((r = reopen_sdbus_once(r, __func__, "sd_bus_call_method()")) < 0)
+				return r;
+
+			r = sd_bus_call_method(systemd_bus, SDBUS_DEST, SDBUS_PATH, SDBUS_IFACE, "Inhibit", &error, &reply, "ssss", arg_what, arg_who, arg_why, arg_mode);
+		} else {
+			/* Permissions for the privileged operation... did it ever succeed? */
+			if (isSupported_Inhibit < 0) {
+				upsdebugx(1, "%s: %s() failed seemingly due to permissions, marking %s as not supported",
+					__func__, "sd_bus_call_method", "Inhibit");
+				isSupported_Inhibit = 0;
+				isSupported_Inhibit_errno = r;
+			}
+		}
+
+		if (r < 0) {
+			upsdebugx(1, "%s: %s() failed (%d): %s",
+				__func__, "sd_bus_call_method", r, strerror(-r));
+			if (error.message && *(error.message))
+				upsdebugx(2, "%s: details from libsystemd: %s",
+					__func__, error.message);
+			return r;
+		} else {
+			upsdebugx(1, "%s: reconnection to D-Bus helped with %s()",
+				__func__, "sd_bus_call_method");
+		}
+	}
+
+	r = sd_bus_message_read_basic(reply, SD_BUS_TYPE_UNIX_FD, &fd);
+	if (r < 0) {
+		upsdebugx(1, "%s: %s() failed (%d): %s",
+			__func__, "sd_bus_message_read_basic", r, strerror(-r));
+		if (isSupported_Inhibit < 0 && !would_reopen_sdbus(r)) {
+			upsdebugx(1, "%s: %s() failed seemingly due to permissions, marking %s as not supported",
+				__func__, "sd_bus_message_read_basic", "Inhibit");
+			isSupported_Inhibit = 0;
+			isSupported_Inhibit_errno = r;
+		}
+		return r;
+	}
+
+	/* Data query succeeded, so it is supported */
+	isSupported_Inhibit = 1;
+
+	/* NOTE: F_DUPFD_CLOEXEC is in POSIX.1-2008 (Linux 2.6.24); seek out
+	 * an alternative sequence of options if needed on older systems */
+	r = RET_NERRNO(fcntl(fd, F_DUPFD_CLOEXEC, 3));
+	if (r < 0) {
+		upsdebugx(1, "%s: fcntl() failed (%d): %s",
+			__func__, r, strerror(-r));
+		return fd;
+	}
+
+	return r;
+}
+
+void Uninhibit(TYPE_FD *fd_ptr)
+{
+	if (!fd_ptr)
+		return;
+	if (INVALID_FD(*fd_ptr))
+		return;
+
+	/* Closing the socket allows systemd to proceed (we un-inhibit our lock on system
+	 * life-cycle handling). After waking up, we should Inhibit() anew, if needed.
+	 */
+	close(*fd_ptr);
+	*fd_ptr = ERROR_FD;
+}
+
+int isPreparingForSleep(void)
+{
+	static int32_t	prev = -1;
+	int32_t	val = 0;	/* 4-byte int expected for SD_BUS_TYPE_BOOLEAN aka 'b' */
+	int	r;
+	_cleanup_(sd_bus_error_free) sd_bus_error	error = SD_BUS_ERROR_NULL;
+
+	if (isSupported_PreparingForSleep == 0) {
+		/* Already determined that we can not use it, e.g. due to perms */
+		errno = isSupported_PreparingForSleep_errno;
+		upsdebug_with_errno(8, "%s: isSupported_PreparingForSleep=%d",
+			__func__, isSupported_PreparingForSleep);
+		return -errno;
+	}
+
+	r = open_sdbus_once(__func__);
+	if (r < 0) {
+		/* Errors, if any, reported above */
+		return r;
+	}
+
+	/* @org.freedesktop.DBus.Property.EmitsChangedSignal("false")
+	 *     readonly b PreparingForSleep = ...;
+	 * https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html
+	 * https://www.freedesktop.org/software/systemd/man/latest/sd_bus_set_property.html
+	 * https://www.freedesktop.org/software/systemd/man/latest/sd_bus_message_append.html (data types)
+	 */
+	r = sd_bus_get_property_trivial(systemd_bus, SDBUS_DEST, SDBUS_PATH, SDBUS_IFACE, "PreparingForSleep", &error, SD_BUS_TYPE_BOOLEAN, &val);
+	if (r < 0) {
+		if (would_reopen_sdbus(r)) {
+			if ((r = reopen_sdbus_once(r, __func__, "sd_bus_get_property_trivial()")) < 0)
+				return r;
+
+			r = sd_bus_get_property_trivial(systemd_bus, SDBUS_DEST, SDBUS_PATH, SDBUS_IFACE, "PreparingForSleep", &error, 'b', &val);
+		} else {
+			if (isSupported_PreparingForSleep < 0) {
+				upsdebugx(1, "%s: %s() failed seemingly due to permissions, marking %s as not supported",
+					__func__, "sd_bus_get_property_trivial", "PreparingForSleep");
+				isSupported_PreparingForSleep = 0;
+				isSupported_PreparingForSleep_errno = r;
+			}
+		}
+
+		if (r < 0) {
+			upsdebugx(1, "%s: %s() failed (%d): %s",
+				__func__, "sd_bus_get_property_trivial", r, strerror(-r));
+			if (error.message && *(error.message))
+				upsdebugx(2, "%s: details from libsystemd: %s",
+					__func__, error.message);
+			return r;
+		} else {
+			upsdebugx(1, "%s: reconnection to D-Bus helped with %s()",
+				__func__, "sd_bus_get_property_trivial");
+		}
+	}
+
+	/* Data query succeeded, so it is supported */
+	isSupported_PreparingForSleep = 1;
+
+	if (val == prev) {
+		/* Unchanged */
+		upsdebugx(8, "%s: state unchanged", __func__);
+		return -1;
+	}
+
+	/* First run and not immediately going to sleep, assume unchanged (no-op for upsmon et al) */
+	if (prev < 0 && !val) {
+		prev = val;
+		upsdebugx(8, "%s: state unchanged (assumed): first run and not immediately going to sleep", __func__);
+		return -1;
+	}
+
+	/* 0 or 1 */
+	upsdebugx(8, "%s: state changed): %" PRIi32 " -> %" PRIi32, __func__, prev, val);
+	prev = val;
+	return val;
+}
+
+#else	/* not WITH_LIBSYSTEMD_INHIBITOR */
+
+int isInhibitSupported(void)
+{
+	return 0;
+}
+
+int isPreparingForSleepSupported(void)
+{
+	return 0;
+}
+
+TYPE_FD Inhibit(const char *arg_what, const char *arg_who, const char *arg_why, const char *arg_mode)
+{
+	static int	reported = 0;
+	NUT_UNUSED_VARIABLE(arg_what);
+	NUT_UNUSED_VARIABLE(arg_who);
+	NUT_UNUSED_VARIABLE(arg_why);
+	NUT_UNUSED_VARIABLE(arg_mode);
+
+	if (!reported) {
+		upsdebugx(6, "%s: Not implemented on this platform", __func__);
+		reported = 1;
+	}
+	return ERROR_FD;
+}
+
+int isPreparingForSleep(void)
+{
+	static int	reported = 0;
+
+	if (!reported) {
+		upsdebugx(6, "%s: Not implemented on this platform", __func__);
+		reported = 1;
+	}
+	return -1;
+}
+
+void Uninhibit(TYPE_FD *fd_ptr)
+{
+	static int	reported = 0;
+	NUT_UNUSED_VARIABLE(fd_ptr);
+
+	if (!reported) {
+		upsdebugx(6, "%s: Not implemented on this platform", __func__);
+		reported = 1;
+	}
+}
+
+#endif	/* not WITH_LIBSYSTEMD_INHIBITOR */
+
 #ifdef WITH_LIBSYSTEMD
 # include <systemd/sd-daemon.h>
 /* upsnotify() debug-logs its reports; a watchdog ping is something we
@@ -54,15 +438,15 @@ static int upsnotify_reported_disabled_systemd = 0;
 /* Define this to 1 for lots of spam at debug level 6, and ignoring WATCHDOG_PID
  * so trying to post reports anyway if WATCHDOG_USEC is valid */
 #  define DEBUG_SYSTEMD_WATCHDOG 0
-# endif
-#endif
+# endif	/* DEBUG_SYSTEMD_WATCHDOG */
+#endif	/* WITH_LIBSYSTEMD */
 /* Similarly for only reporting once if the notification subsystem is not built-in */
 static int upsnotify_reported_disabled_notech = 0;
 static int upsnotify_report_verbosity = -1;
 
 /* the reason we define UPS_VERSION as a static string, rather than a
 	macro, is to make dependency tracking easier (only common.o depends
-	on nut_version_macro.h), and also to prevent all sources from
+	on nut_version.h), and also to prevent all sources from
 	having to be recompiled each time the version changes (they only
 	need to be re-linked). */
 #include "nut_version.h"
@@ -187,6 +571,92 @@ int syslog_is_disabled(void)
 	}
 
 	return value;
+}
+
+int banner_is_disabled(void)
+{
+	static int value = -1;
+
+	if (value < 0) {
+		char *s = getenv("NUT_QUIET_INIT_BANNER");
+		/* Envvar present and empty or true-ish means NUT tool name+version
+		 * banners disabled by the setting: default is enabled (inversed per
+		 * method name) */
+		value = 0;
+		if (s) {
+			if (*s == '\0' || !strcasecmp(s, "true") || strcmp(s, "1")) {
+				value = 1;
+			}
+		}
+	}
+
+	return value;
+}
+
+const char *describe_NUT_VERSION_once(void)
+{
+	static char	buf[LARGEBUF];
+	static const char	*printed = NULL;
+
+	if (printed)
+		return printed;
+
+	memset(buf, 0, sizeof(buf));
+
+#ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+#pragma GCC diagnostic push
+#endif
+#ifdef HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+#pragma GCC diagnostic ignored "-Wunreachable-code"
+#endif
+#ifdef __clang__
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wunreachable-code"
+#endif
+	/* NOTE: Some compilers deduce that macro-based decisions about
+	 * NUT_VERSION_IS_RELEASE make one of codepaths unreachable in
+	 * a particular build. So we pragmatically handwave this away.
+	 */
+	if (1 < snprintf(buf, sizeof(buf),
+		"%s %s%s%s",
+		NUT_VERSION_MACRO,
+		NUT_VERSION_IS_RELEASE ? "release" : "(development iteration after ",
+		NUT_VERSION_IS_RELEASE ? "" : NUT_VERSION_SEMVER_MACRO,
+		NUT_VERSION_IS_RELEASE ? "" : ")"
+	)) {
+		printed = buf;
+	} else {
+		upslogx(LOG_WARNING, "%s: failed to report detailed NUT version", __func__);
+		printed = UPS_VERSION;
+	}
+#ifdef __clang__
+#pragma clang diagnostic pop
+#endif
+#ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+#pragma GCC diagnostic pop
+#endif
+
+	return printed;
+}
+
+int print_banner_once(const char *prog, int even_if_disabled)
+{
+	static int	printed = 0;
+	static int	ret = -1;
+
+	if (printed)
+		return ret;
+
+	if (!banner_is_disabled() || even_if_disabled) {
+		ret = printf("Network UPS Tools %s %s%s\n",
+			prog, describe_NUT_VERSION_once(),
+			even_if_disabled == 2 ? "\n" : "");
+		fflush(stdout);
+		if (ret > 0)
+			printed = 1;
+	}
+
+	return ret;
 }
 
 /* enable writing upslog_with_errno() and upslogx() type messages to
@@ -919,10 +1389,26 @@ size_t parseprogbasename(char *buf, size_t buflen, const char *progname, size_t 
 	return progbasenamelen;
 }
 
-int checkprocname(pid_t pid, const char *progname)
+int checkprocname_ignored(const char *caller)
 {
-	/* If we can determine the binary path name of the specified "pid",
+	char	*s = NULL;
+
+	if ((s = getenv("NUT_IGNORE_CHECKPROCNAME"))) {
+		/* FIXME: Make server/conf.c::parse_boolean() reusable */
+		if ( (!strcasecmp(s, "true")) || (!strcasecmp(s, "on")) || (!strcasecmp(s, "yes")) || (!strcasecmp(s, "1"))) {
+			upsdebugx(1, "%s for %s: skipping because caller set NUT_IGNORE_CHECKPROCNAME", __func__, NUT_STRARG(caller));
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+int compareprocname(pid_t pid, const char *procname, const char *progname)
+{
+	/* Given the binary path name of (presumably) a running process,
 	 * check if it matches the assumed name of the current program.
+	 * The "pid" value is used in log reporting.
 	 * Returns:
 	 *	-3	Skipped because NUT_IGNORE_CHECKPROCNAME is set
 	 *	-2	Could not parse a program name (ok to proceed,
@@ -932,9 +1418,9 @@ int checkprocname(pid_t pid, const char *progname)
 	 *	0	Process name identified, does not seem to match
 	 *	1+	Process name identified, and seems to match with
 	 *		varying precision
-	 * Generally speaking, if (checkprocname(...)) then ok to proceed
+	 * Generally speaking, if (compareprocname(...)) then ok to proceed
 	 */
-	char	*procname = NULL, *s;
+
 	int	ret = -127;
 	size_t	procbasenamelen = 0, progbasenamelen = 0;
 	/* Track where the last dot is in the basename; 0 means none */
@@ -945,16 +1431,11 @@ int checkprocname(pid_t pid, const char *progname)
 	char	procbasename[PATH_MAX], progbasename[PATH_MAX];
 #endif
 
-	if ((s = getenv("NUT_IGNORE_CHECKPROCNAME"))) {
-		/* FIXME: Make server/conf.c::parse_boolean() reusable */
-		if ( (!strcasecmp(s, "true")) || (!strcasecmp(s, "on")) || (!strcasecmp(s, "yes")) || (!strcasecmp(s, "1"))) {
-			upsdebugx(1, "%s: skipping because caller set NUT_IGNORE_CHECKPROCNAME", __func__);
-			ret = -3;
-			goto finish;
-		}
+	if (checkprocname_ignored(__func__)) {
+		ret = -3;
+		goto finish;
 	}
 
-	procname = getprocname(pid);
 	if (!procname || !progname) {
 		ret = -1;
 		goto finish;
@@ -975,7 +1456,7 @@ int checkprocname(pid_t pid, const char *progname)
 	}
 
 	/* First quickly try for an exact hit of base names */
-	if (progbasenamelen == procbasenamelen && progbasenamedot == procbasenamedot && !strcmp(procname, progname)) {
+	if (progbasenamelen == procbasenamelen && progbasenamedot == procbasenamedot && !strcmp(procbasename, progbasename)) {
 		ret = 2;
 		goto finish;
 	}
@@ -1006,6 +1487,12 @@ int checkprocname(pid_t pid, const char *progname)
 		}
 	}
 #endif
+
+	/* TOTHINK: Developer builds wrapped with libtool may be prefixed
+	 * by "lt-" in the filename. Should we re-enter (or wrap around)
+	 * this search with a set of variants with/without the prefix on
+	 * both sides?..
+	 */
 
 	/* Nothing above has matched */
 	ret = 0;
@@ -1091,6 +1578,42 @@ finish:
 	return ret;
 }
 
+int checkprocname(pid_t pid, const char *progname)
+{
+	/* If we can determine the binary path name of the specified "pid",
+	 * check if it matches the assumed name of the current program.
+	 * Returns: same as compareprocname()
+	 * Generally speaking, if (checkprocname(...)) then ok to proceed
+	 */
+	char	*procname = NULL;
+	int	ret = 0;
+
+	/* Quick skip before drilling into getprocname() */
+	if (checkprocname_ignored(__func__)) {
+		ret = -3;
+		goto finish;
+	}
+
+	if (!progname) {
+		ret = -1;
+		goto finish;
+	}
+
+	procname = getprocname(pid);
+	if (!procname) {
+		ret = -1;
+		goto finish;
+	}
+
+	ret = compareprocname(pid, procname, progname);
+
+finish:
+	if (procname)
+		free(procname);
+
+	return ret;
+}
+
 #ifdef WIN32
 /* In WIN32 all non binaries files (namely configuration and PID files)
    are retrieved relative to the path of the binary itself.
@@ -1154,7 +1677,7 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 {
 #ifndef WIN32
 	int	ret, cpn1 = -10, cpn2 = -10;
-	char	*current_progname = NULL;
+	char	*current_progname = NULL, *procname = NULL;
 
 	/* TOTHINK: What about containers where a NUT daemon *is* the only process
 	 * and is the PID=1 of the container (recycle if dead)? */
@@ -1167,9 +1690,12 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 	}
 
 	ret = 0;
-	if (progname) {
+	if (!checkprocname_ignored(__func__))
+		procname = getprocname(pid);
+
+	if (procname && progname) {
 		/* Check against some expected (often built-in) name */
-		if (!(cpn1 = checkprocname(pid, progname))) {
+		if (!(cpn1 = compareprocname(pid, procname, progname))) {
 			/* Did not match expected (often built-in) name */
 			ret = -1;
 		} else {
@@ -1182,13 +1708,13 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 	}
 	/* if (cpn1 == -3) => NUT_IGNORE_CHECKPROCNAME=true */
 	/* if (cpn1 == -1) => could not determine name of PID... retry just in case? */
-	if (ret <= 0 && check_current_progname && cpn1 != -3) {
+	if (procname && ret <= 0 && check_current_progname && cpn1 != -3) {
 		/* NOTE: This could be optimized a bit by pre-finding the procname
 		 * of "pid" and re-using it, but this is not a hot enough code path
 		 * to bother much.
 		 */
 		current_progname = getprocname(getpid());
-		if (current_progname && (cpn2 = checkprocname(pid, current_progname))) {
+		if (current_progname && (cpn2 = compareprocname(pid, procname, current_progname))) {
 			if (cpn2 > 0) {
 				/* Matched current process as asked, ok to proceed */
 				ret = 2;
@@ -1206,17 +1732,23 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 	}
 
 	/* if ret == 0, ok to proceed - not asked for any sanity checks;
-	 * if ret > 0 we had some definitive match above
+	 * if ret > 0, ok to proceed - we had some definitive match above;
+	 * if ret < 0, NOT OK to proceed - we had some definitive fault above
 	 */
 	if (ret < 0) {
 		upsdebugx(1,
 			"%s: ran at least one check, and all such checks "
 			"found a process name for PID %" PRIuMAX " and "
-			"failed to match: expected progname='%s' (res=%d), "
-			"current progname='%s' (res=%d)",
+			"failed to match: "
+			"found procname='%s', "
+			"expected progname='%s' (res=%d%s), "
+			"current progname='%s' (res=%d%s)",
 			__func__, (uintmax_t)pid,
+			NUT_STRARG(procname),
 			NUT_STRARG(progname), cpn1,
-			NUT_STRARG(current_progname), cpn2);
+			(cpn1 == -10 ? ": did not check" : ""),
+			NUT_STRARG(current_progname), cpn2,
+			(cpn2 == -10 ? ": did not check" : ""));
 
 		if (nut_debug_level > 0 || nut_sendsignal_debug_level > 1) {
 			switch (ret) {
@@ -1259,6 +1791,9 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 							(uintmax_t)pid);
 					}
 					break;
+
+				default:
+					break;
 			}
 		}
 
@@ -1267,12 +1802,23 @@ int sendsignalpid(pid_t pid, int sig, const char *progname, int check_current_pr
 			current_progname = NULL;
 		}
 
+		if (procname) {
+			free(procname);
+			procname = NULL;
+		}
+
 		/* Logged or not, sanity-check was requested and failed */
 		return -1;
 	}
+
 	if (current_progname) {
 		free(current_progname);
 		current_progname = NULL;
+	}
+
+	if (procname) {
+		free(procname);
+		procname = NULL;
 	}
 
 	/* see if this is going to work first - does the process exist,
@@ -1319,8 +1865,10 @@ pid_t parsepid(const char *buf)
 	pid_t	pid = -1;
 	intmax_t	_pid;
 
+	errno = 0;
 	if (!buf) {
 		upsdebugx(6, "%s: called with NULL input", __func__);
+		errno = EINVAL;
 		return pid;
 	}
 
@@ -1329,6 +1877,8 @@ pid_t parsepid(const char *buf)
 	if (_pid <= get_max_pid_t()) {
 		pid = (pid_t)_pid;
 	} else {
+		errno = ERANGE;
+
 		if (nut_debug_level > 0 || nut_sendsignal_debug_level > 0)
 			upslogx(LOG_NOTICE,
 				"Received a pid number too big for a pid_t: %"
@@ -1338,17 +1888,15 @@ pid_t parsepid(const char *buf)
 	return pid;
 }
 
-/* open pidfn, get the pid, then send it sig
+/* open pidfn, get the pid;
  * returns negative codes for errors, or
- * zero for a successfully sent signal
+ * zero for a successfully discovered value
  */
-#ifndef WIN32
-int sendsignalfn(const char *pidfn, int sig, const char *progname, int check_current_progname)
+pid_t parsepidfile(const char *pidfn)
 {
 	char	buf[SMALLBUF];
 	FILE	*pidf;
 	pid_t	pid = -1;
-	int	ret = -1;
 
 	pidf = fopen(pidfn, "r");
 	if (!pidf) {
@@ -1368,7 +1916,9 @@ int sendsignalfn(const char *pidfn, int sig, const char *progname, int check_cur
 		fclose(pidf);
 		return -2;
 	}
-	/* TOTHINK: Original code only closed pidf before
+
+	/* TOTHINK: Original sendsignalfn code (which this
+	 * was extracted from) only closed pidf before
 	 * exiting the method, on error or "normally".
 	 * Why not here? Do we want an (exclusive?) hold
 	 * on it while being active in the method?
@@ -1377,12 +1927,26 @@ int sendsignalfn(const char *pidfn, int sig, const char *progname, int check_cur
 	/* this method actively reports errors, if any */
 	pid = parsepid(buf);
 
+	fclose(pidf);
+
+	return pid;
+}
+
+/* open pidfn, get the pid, then send it sig
+ * returns negative codes for errors, or
+ * zero for a successfully sent signal
+ */
+#ifndef WIN32
+int sendsignalfn(const char *pidfn, int sig, const char *progname, int check_current_progname)
+{
+	int	ret = -1;
+	pid_t	pid = parsepidfile(pidfn);
+
 	if (pid >= 0) {
 		/* this method actively reports errors, if any */
 		ret = sendsignalpid(pid, sig, progname, check_current_progname);
 	}
 
-	fclose(pidf);
 	return ret;
 }
 
@@ -1604,6 +2168,66 @@ double difftimespec(struct timespec x, struct timespec y)
 }
 #endif	/* HAVE_CLOCK_GETTIME && HAVE_CLOCK_MONOTONIC */
 
+/* Help avoid cryptic "upsnotify: notify about state 4 with libsystemd:"
+ * (with only numeric codes) below */
+const char *str_upsnotify_state(upsnotify_state_t state) {
+	switch (state) {
+		case NOTIFY_STATE_READY:
+			return "NOTIFY_STATE_READY";
+		case NOTIFY_STATE_READY_WITH_PID:
+			return "NOTIFY_STATE_READY_WITH_PID";
+		case NOTIFY_STATE_RELOADING:
+			return "NOTIFY_STATE_RELOADING";
+		case NOTIFY_STATE_STOPPING:
+			return "NOTIFY_STATE_STOPPING";
+		case NOTIFY_STATE_STATUS:
+			/* Send a text message per "fmt" below */
+			return "NOTIFY_STATE_STATUS";
+		case NOTIFY_STATE_WATCHDOG:
+			/* Ping the framework that we are still alive */
+			return "NOTIFY_STATE_WATCHDOG";
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && ( (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_COVERED_SWITCH_DEFAULT) || (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE) )
+# pragma GCC diagnostic push
+#endif
+#ifdef HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_COVERED_SWITCH_DEFAULT
+# pragma GCC diagnostic ignored "-Wcovered-switch-default"
+#endif
+#ifdef HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE
+# pragma GCC diagnostic ignored "-Wunreachable-code"
+#endif
+/* Older CLANG (e.g. clang-3.4) seems to not support the GCC pragmas above */
+#ifdef __clang__
+# pragma clang diagnostic push
+# pragma clang diagnostic ignored "-Wunreachable-code"
+# pragma clang diagnostic ignored "-Wcovered-switch-default"
+#endif
+		default:
+			/* Must not occur. */
+			return "NOTIFY_STATE_UNDEFINED";
+#ifdef __clang__
+# pragma clang diagnostic pop
+#endif
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && ( (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_COVERED_SWITCH_DEFAULT) || (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_UNREACHABLE_CODE) )
+# pragma GCC diagnostic pop
+#endif
+	}
+}
+
+static void upsnotify_suggest_NUT_QUIET_INIT_UPSNOTIFY_once(void) {
+	static	int reported = 0;
+
+	if (reported)
+		return;
+
+	reported = 1;
+
+	if (getenv("NUT_QUIET_INIT_UPSNOTIFY"))
+		return;
+
+	upsdebugx(1, "On systems without service units, "
+		"consider `export NUT_QUIET_INIT_UPSNOTIFY=true`");
+}
+
 /* Send (daemon) state-change notifications to an
  * external service management framework such as systemd
  */
@@ -1697,20 +2321,26 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 # if defined(WITHOUT_LIBSYSTEMD) && (WITHOUT_LIBSYSTEMD)
 	NUT_UNUSED_VARIABLE(buf);
 	NUT_UNUSED_VARIABLE(msglen);
-	if (!upsnotify_reported_disabled_systemd)
+	if (!upsnotify_reported_disabled_systemd) {
 		upsdebugx(upsnotify_report_verbosity,
-			"%s: notify about state %i with libsystemd: "
+			"%s: notify about state %s with libsystemd: "
 			"skipped for libcommonclient build, "
-			"will not spam more about it", __func__, state);
+			"will not spam more about it",
+			__func__, str_upsnotify_state(state));
+		upsnotify_suggest_NUT_QUIET_INIT_UPSNOTIFY_once();
+	}
+
 	upsnotify_reported_disabled_systemd = 1;
-# else
+# else	/* not WITHOUT_LIBSYSTEMD */
 	if (!getenv("NOTIFY_SOCKET")) {
-		if (!upsnotify_reported_disabled_systemd)
+		if (!upsnotify_reported_disabled_systemd) {
 			upsdebugx(upsnotify_report_verbosity,
-				"%s: notify about state %i with libsystemd: "
-				"was requested, but not running as a service unit now, "
-				"will not spam more about it",
-				__func__, state);
+				"%s: notify about state %s with libsystemd: "
+				"was requested, but not running as a service "
+				"unit now, will not spam more about it",
+				__func__, str_upsnotify_state(state));
+			upsnotify_suggest_NUT_QUIET_INIT_UPSNOTIFY_once();
+		}
 		upsnotify_reported_disabled_systemd = 1;
 	} else {
 #  ifdef HAVE_SD_NOTIFY
@@ -1740,7 +2370,9 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 #   if ! DEBUG_SYSTEMD_WATCHDOG
 		if (state != NOTIFY_STATE_WATCHDOG || !upsnotify_reported_watchdog_systemd)
 #   endif
-			upsdebugx(6, "%s: notify about state %i with libsystemd: use sd_notify()", __func__, state);
+			upsdebugx(6, "%s: notify about state %s with "
+				"libsystemd: use sd_notify()",
+				__func__, str_upsnotify_state(state));
 
 		/* https://www.freedesktop.org/software/systemd/man/sd_notify.html */
 		if (msglen) {
@@ -1851,7 +2483,7 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 								"(%" PRIu64 "msec remain)",
 								__func__, postit, to);
 					}
-#   endif
+#   endif	/* HAVE_SD_WATCHDOG_ENABLED */
 
 					if (postit < 1) {
 						char *s = getenv("WATCHDOG_USEC");
@@ -1977,7 +2609,9 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 
 #  else	/* not HAVE_SD_NOTIFY: */
 		/* FIXME: Try to fork and call systemd-notify helper program */
-		upsdebugx(6, "%s: notify about state %i with libsystemd: lacking sd_notify()", __func__, state);
+		upsdebugx(6, "%s: notify about state %s with "
+			"libsystemd: lacking sd_notify()",
+			__func__, str_upsnotify_state(state));
 		ret = -127;
 #  endif	/* HAVE_SD_NOTIFY */
 	}
@@ -1997,15 +2631,16 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 		if (ret == -127) {
 			if (!upsnotify_reported_disabled_notech)
 				upsdebugx(upsnotify_report_verbosity,
-					"%s: failed to notify about state %i: "
+					"%s: failed to notify about state %s: "
 					"no notification tech defined, "
 					"will not spam more about it",
-					__func__, state);
+					__func__, str_upsnotify_state(state));
 			upsnotify_reported_disabled_notech = 1;
+			upsnotify_suggest_NUT_QUIET_INIT_UPSNOTIFY_once();
 		} else {
 			upsdebugx(6,
-				"%s: failed to notify about state %i",
-				__func__, state);
+				"%s: failed to notify about state %s",
+				__func__, str_upsnotify_state(state));
 		}
 	}
 
@@ -2016,6 +2651,7 @@ int upsnotify(upsnotify_state_t state, const char *fmt, ...)
 			"%s: logged the systemd watchdog situation once, "
 			"will not spam more about it", __func__);
 		upsnotify_reported_watchdog_systemd = 1;
+		upsnotify_suggest_NUT_QUIET_INIT_UPSNOTIFY_once();
 	}
 # endif
 #endif
@@ -2030,7 +2666,9 @@ void nut_report_config_flags(void)
 	 * Depending on amount of configuration tunables involved by a particular
 	 * build of NUT, the string can be quite long (over 1KB).
 	 */
+#if 0
 	const char *acinit_ver = NULL;
+#endif
 	/* Pass these as variables to avoid warning about never reaching one
 	 * of compiled codepaths: */
 	const char *compiler_ver = CC_VERSION;
@@ -2040,6 +2678,7 @@ void nut_report_config_flags(void)
 	if (nut_debug_level < 1)
 		return;
 
+#if 0
 	/* Only report git revision if NUT_VERSION_MACRO in nut_version.h aka
 	 * UPS_VERSION here is remarkably different from PACKAGE_VERSION from
 	 * configure.ac AC_INIT() -- which may be e.g. "2.8.0.1" although some
@@ -2057,7 +2696,14 @@ void nut_report_config_flags(void)
 		 * especially embedders, tend to place their product IDs here),
 		 * or if PACKAGE_VERSION *is NOT* a substring of it: */
 		acinit_ver = PACKAGE_VERSION;
+/*
+		// Triplet that was printed below:
+		(acinit_ver ? " (release/snapshot of " : ""),
+		(acinit_ver ? acinit_ver : ""),
+		(acinit_ver ? ")" : ""),
+*/
 	}
+#endif
 
 	/* NOTE: If changing wording here, keep in sync with configure.ac logic
 	 * looking for CONFIG_FLAGS_DEPLOYED via "configured with flags:" string!
@@ -2075,13 +2721,10 @@ void nut_report_config_flags(void)
 	}
 
 	if (xbit_test(upslog_flags, UPSLOG_STDERR)) {
-		fprintf(stderr, "%4.0f.%06ld\t[D1] Network UPS Tools version %s%s%s%s%s%s%s %s%s\n",
+		fprintf(stderr, "%4.0f.%06ld\t[D1] Network UPS Tools version %s%s%s%s %s%s\n",
 			difftime(now.tv_sec, upslog_start.tv_sec),
 			(long)(now.tv_usec - upslog_start.tv_usec),
-			UPS_VERSION,
-			(acinit_ver ? " (release/snapshot of " : ""),
-			(acinit_ver ? acinit_ver : ""),
-			(acinit_ver ? ")" : ""),
+			describe_NUT_VERSION_once(),
 			(compiler_ver && *compiler_ver != '\0' ? " built with " : ""),
 			(compiler_ver && *compiler_ver != '\0' ? compiler_ver : ""),
 			(compiler_ver && *compiler_ver != '\0' ? " and" : ""),
@@ -2095,18 +2738,16 @@ void nut_report_config_flags(void)
 
 	/* NOTE: May be ignored or truncated by receiver if that syslog server
 	 * (and/or OS sender) does not accept messages of such length */
-	if (xbit_test(upslog_flags, UPSLOG_SYSLOG))
-		syslog(LOG_DEBUG, "Network UPS Tools version %s%s%s%s%s%s%s %s%s",
-			UPS_VERSION,
-			(acinit_ver ? " (release/snapshot of " : ""),
-			(acinit_ver ? acinit_ver : ""),
-			(acinit_ver ? ")" : ""),
+	if (xbit_test(upslog_flags, UPSLOG_SYSLOG)) {
+		syslog(LOG_DEBUG, "Network UPS Tools version %s%s%s%s %s%s",
+			describe_NUT_VERSION_once(),
 			(compiler_ver && *compiler_ver != '\0' ? " built with " : ""),
 			(compiler_ver && *compiler_ver != '\0' ? compiler_ver : ""),
 			(compiler_ver && *compiler_ver != '\0' ? " and" : ""),
 			(config_flags && *config_flags != '\0' ? "configured with flags: " : "configured all by default guesswork"),
 			(config_flags && *config_flags != '\0' ? config_flags : "")
 		);
+	}
 }
 
 static void vupslog(int priority, const char *fmt, va_list va, int use_strerror)

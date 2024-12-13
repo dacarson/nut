@@ -76,6 +76,14 @@ expression.
 NOTE: When using this option, it is mandatory to also specify the *vendorid*
 and *productid* matching parameters.
 
+*lowbatt*='num'::
+Set the percentage at which the UPS will consider the battery charge as
+critically low, possibly resulting in a forced shutdown (FSD) situation.
++
+This value is typically dictated by the UPS device, although there is a
+fallback default value of 30 (in percent). Overriding this value can be
+helpful when the UPS sets this value to a lower percentage than intended.
+
 *offdelay*='num'::
 Set the timer before the UPS is turned off after the kill power command is
 sent (via the *-k* switch).
@@ -85,7 +93,8 @@ The default value is 20 (in seconds). Usually this *must be lower* than
 +
 Note that many Cyber Power Systems (CPS) models tend to divide this delay by
 60 and round down, so the minimum advisable value is 60 to avoid powering off
-immediately after NUT sends the shutdown command to the UPS.
+immediately after NUT sends the shutdown command to the UPS. More details
+below.
 
 *ondelay*='num'::
 Set the timer for the UPS to switch on in case the power returns after the
@@ -113,6 +122,15 @@ variables.  The default value is 30 (in seconds).
 If this flag is set, the driver will not use Interrupt In transfers during the
 shorter "pollinterval" cycles (not recommended, but needed if these reports
 are broken on your UPS).
+
+*interrupt_pipe_no_events_tolerance*='num'::
+Set the tolerance for how many times in a row could we have "Got 0 HID objects"
+when using USB interrupt mode?  This may normally be due to a device having
+nothing urgent to report, so the default value is `-1` and this situation is
+not handled in any way specially.  However with some devices this was seen
+in conjunction with a frozen controller, where only a driver reconnection
+restored the data exchange (e.g. APC BXnnnnMI) -- in such cases you may want
+to use a reasonable non-negative value here.
 
 *onlinedischarge_battery*::
 If this flag is set, the driver will treat `OL+DISCHRG` status as
@@ -159,6 +177,20 @@ log message throttling description above.  This option adds a concept of UPS
 not forcing it to be fully charged all the time.  As long as the current value
 of `battery.charge` remains at or above this threshold percentage (default 100),
 the `OL+DISCHRG` message logging is not triggered by variations of the charge.
+
+*lbrb_log_delay_sec*='num'::
+Set to delay status-setting (and log messages) about device entering `LB` or
+`LB+RB` state.
++
+Some APC BXnnnnMI device models or firmware versions (reportedly 2023-2024)
+frequently report low battery, replace battery, and all ok within a couple
+of seconds, sometimes but not always preceded by OL+DISCHRG (presumably
+calibration). This setting lets the driver ignore short-lived states and
+only pay attention if they persist longer than this setting (and the device
+power state is `OL`).
+
+*lbrb_log_delay_without_calibrating*::
+Set to apply `lbrb_log_delay_sec` even if device is not calibrating.
 
 *disable_fix_report_desc*::
 Set to disable fix-ups for broken USB encoding, etc. which we apply by default
@@ -269,6 +301,22 @@ the Interrupt In transfers if they are known not to work.
 KNOWN ISSUES AND BUGS
 ---------------------
 
+UPS reports 65535 sec (or 18:12:15) of battery.runtime capability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+From a number of reports, it seems that some devices either can not report
+more than a 16-bit unsigned value in the standard field for remaining run
+time (vendor extended fields may exist but be unknown to the mapping tables
+in your current NUT driver build), or return `-1` for error and that gets
+treated as an unsigned 16-bit 65535 value.
+
+According to some issue discussions, passing a battery test (calibration)
+can help the UPS re-estimate the time more correctly.
+
+This problem may also be linked to a very lightly loaded large-capacity UPS.
+In some cases vendor documentation explicitly states that runtime calculation
+is not reliable with loads under e.g. 10%.
+
 Repetitive timeout and staleness
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
@@ -284,6 +332,15 @@ value (such as 10 seconds). This should solve the issue.
 
 Note that if you increase "pollinterval" beyond 10 or 15 seconds, you might
 also want to increase "pollfreq" by the same factor.
+
+With certain devices and operating systems, notably MGE/Eaton USB Vendor ID
+(`0x0463`) on some versions of the Linux kernel, you might encounter poor
+interaction with the "USB HID quirk" mechanism, which precludes Linux from
+seeing the device as a `hid-generic` first, to hand it over to a NUT driver
+later. For more details, see the NUT FAQ document. This particular quirk can
+be tuned with a kernel boot parameter (via GRUB etc.):
+
+        usbhid.quirks=0x0463:0xffff:0x08
 
 Got EPERM: Operation not permitted upon driver startup
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -315,6 +372,12 @@ UPS cuts power too soon
 Note that many Cyber Power Systems (CPS) models tend to divide `offdelay`
 by 60 and round down, so the minimum advisable value is 60 (seconds) to avoid
 powering off immediately after NUT sends the shutdown command to the UPS.
+
+For many Cyberpower UPSs, `offdelay` must be set to `0` for normal behavior
+(the load is restored when AC power returns).  Setting `offdelay` above `0`
+will restart the UPS load *regardless of whether or not power has returned*,
+and setting `offdelay` below `0` will disable the auto-power-on function of
+the UPS, keeping the load off even when power returns.
 
 UPS does not set battery.charge.low but says OK
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

@@ -1454,7 +1454,7 @@ public:
 	};
 
 	enum NotifyType {
-		NOTIFY_ONLINE,
+		NOTIFY_ONLINE = 0,
 		NOTIFY_ONBATT,
 		NOTIFY_LOWBATT,
 		NOTIFY_FSD,
@@ -1470,6 +1470,17 @@ public:
 		NOTIFY_NOTOFF,
 		NOTIFY_BYPASS,
 		NOTIFY_NOTBYPASS,
+		NOTIFY_ECO,
+		NOTIFY_NOTECO,
+		NOTIFY_ALARM,
+		NOTIFY_NOTALARM,
+
+		NOTIFY_OTHER = 28,
+		NOTIFY_NOTOTHER,
+
+		NOTIFY_SUSPEND_STARTING = 30,
+		NOTIFY_SUSPEND_FINISHED,
+
 		NOTIFY_TYPE_MAX
 	};
 
@@ -1663,6 +1674,7 @@ public:
 	inline bool getNoWait()            const { return getFlag("nowait"); }
 
 	inline long long int getDebugMin()      const { return getInt("debug_min"); }
+	inline long long int getLibusbDebug()   const { return getInt("LIBUSB_DEBUG"); }
 	inline long long int getMaxRetry()      const { return getInt("maxretry"); }
 	inline long long int getMaxStartDelay() const { return getInt("maxstartdelay"); }
 	inline long long int getPollInterval()  const { return getInt("pollinterval", 5); }  // TODO: check the default
@@ -1677,6 +1689,7 @@ public:
 	inline void setNoWait(bool val = true)              { setFlag("nowait",    val); }
 
 	inline void setDebugMin(long long int num)          { setInt("debug_min",     num); }
+	inline void setLibusbDebug(long long int num)       { setInt("LIBUSB_DEBUG",  num); }
 	inline void setMaxRetry(long long int num)          { setInt("maxretry",      num); }
 	inline void setMaxStartDelay(long long int delay)   { setInt("maxstartdelay", delay); }
 	inline void setPollInterval(long long int interval) { setInt("pollinterval",  interval); }
@@ -1844,12 +1857,14 @@ public:
 	inline long long int getDaysOff(const std::string & ups)                   const { return getInt(ups, "daysoff"); }             // CHECKME
 	inline long long int getDaySweek(const std::string & ups)                  const { return getInt(ups, "daysweek"); }            // CHECKME
 	inline long long int getDebugMin(const std::string & ups)                  const { return getInt(ups, "debug_min"); }
+	inline long long int getLibusbDebug(const std::string & ups)               const { return getInt(ups, "LIBUSB_DEBUG"); }
 	inline long long int getFrequency(const std::string & ups)                 const { return getInt(ups, "frequency"); }           // CHECKME
 	inline long long int getHourOff(const std::string & ups)                   const { return getInt(ups, "houroff"); }             // CHECKME
 	inline long long int getHourOn(const std::string & ups)                    const { return getInt(ups, "houron"); }              // CHECKME
 	inline long long int getI2C_address(const std::string & ups)               const { return getInt(ups, "i2c_address"); }
 	inline long long int getIdleLoad(const std::string & ups)                  const { return getInt(ups, "idleload"); }            // CHECKME
 	inline long long int getInputTimeout(const std::string & ups)              const { return getInt(ups, "input_timeout"); }       // CHECKME
+	inline long long int getInterruptPipeNoEventsTolerance(const std::string & ups)       const { return getInt(ups, "interrupt_pipe_no_events_tolerance"); }
 	inline long long int getInterruptSize(const std::string & ups)             const { return getInt(ups, "interruptsize"); }
 	inline long long int getLineVoltage(const std::string & ups)               const { return getInt(ups, "linevoltage"); }         // CHECKME
 	inline long long int getLoadpercentage(const std::string & ups)            const { return getInt(ups, "loadPercentage"); }      // CHECKME
@@ -2057,12 +2072,14 @@ public:
 	inline void setDaysOff(const std::string & ups, long long int daysoff)                    { setInt(ups, "daysoff",             daysoff); }      // CHECKME
 	inline void setDaysWeek(const std::string & ups, long long int daysweek)                  { setInt(ups, "daysweek",            daysweek); }     // CHECKME
 	inline void setDebugMin(const std::string & ups, long long int val)                       { setInt(ups, "debug_min",           val); }
+	inline void setLibusbDebug(const std::string & ups, long long int val)                    { setInt(ups, "LIBUSB_DEBUG",        val); }
 	inline void setFrequency(const std::string & ups, long long int frequency)                { setInt(ups, "frequency",           frequency); }    // CHECKME
 	inline void setHourOff(const std::string & ups, long long int houroff)                    { setInt(ups, "houroff",             houroff); }      // CHECKME
 	inline void setHourOn(const std::string & ups, long long int houron)                      { setInt(ups, "houron",              houron); }       // CHECKME
 	inline void setI2C_address(const std::string & ups, long long int val)                    { setInt(ups, "i2c_address",         val); }
 	inline void setIdleLoad(const std::string & ups, long long int idleload)                  { setInt(ups, "idleload",            idleload); }     // CHECKME
 	inline void setInputTimeout(const std::string & ups, long long int timeout)               { setInt(ups, "input_timeout",       timeout); }      // CHECKME
+	inline void setInterruptPipeNoEventsTolerance(const std::string & ups, long long int val) { setInt(ups, "interrupt_pipe_no_events_tolerance", val); }
 	inline void setInterruptSize(const std::string & ups, long long int val)                  { setInt(ups, "interruptsize",       val); }
 	inline void setLineVoltage(const std::string & ups, long long int linevoltage)            { setInt(ups, "linevoltage",         linevoltage); }  // CHECKME
 	inline void setLoadpercentage(const std::string & ups, long long int load)                { setInt(ups, "loadPercentage",      load); }         // CHECKME

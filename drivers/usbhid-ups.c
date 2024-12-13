@@ -29,7 +29,7 @@
  */
 
 #define DRIVER_NAME	"Generic HID driver"
-#define DRIVER_VERSION	"0.55"
+#define DRIVER_VERSION	"0.59"
 
 #define HU_VAR_WAITBEFORERECONNECT "waitbeforereconnect"
 
@@ -139,8 +139,29 @@ bool_t use_interrupt_pipe = TRUE;
 bool_t use_interrupt_pipe = FALSE;
 #endif
 static size_t interrupt_pipe_EIO_count = 0; /* How many times we had I/O errors since last reconnect? */
+
+/**
+ * How many times do we tolerate having "0 HID objects" in a row?
+ * Default -1 means indefinitely, but when some controllers hang,
+ * this is a clue that we want to fully restart the connection.
+ */
+static long interrupt_pipe_no_events_tolerance = -1;
+/* How many times did we actually have "Got 0 HID objects" in a row? */
+static long interrupt_pipe_no_events_count = 0;
+/* How HIDGetEvents() below reports no events found */
+#define	NUT_LIBUSB_CODE_NO_EVENTS	0
+
 static time_t lastpoll; /* Timestamp the last polling */
 hid_dev_handle_t udev = HID_DEV_HANDLE_CLOSED;
+
+/**
+ * Track when calibration started, whether known from UPS status flags
+ * or interpreted from OL&DISCHRG combo on some devices (see below).
+ * The last_calibration_start is reset to 0 when the status becomes
+ * inactive, and last_calibration_finish is incremented every time.
+ */
+static time_t last_calibration_start = 0;
+static time_t last_calibration_finish = 0;
 
 /**
  * CyberPower UT series sometime need a bit of help deciding their online status.
@@ -196,6 +217,34 @@ static int onlinedischarge_log_throttle_charge = -1;
  */
 static int onlinedischarge_log_throttle_hovercharge = 100;
 
+/**
+ * Per https://github.com/networkupstools/nut/issues/2347 some
+ * APC BXnnnnMI devices made (flashed?) in 2023-2024 irregularly
+ * but frequently spew a series of state changes:
+ * * (maybe OL+DISCHRG),
+ * * LB,
+ * * RB,
+ * * <all ok>
+ * within a couple of seconds. If this tunable is positive, we
+ * would only report the device states on the bus if they persist
+ * that long (or more), only then assuming they reflect a real
+ * problematic state and not some internal calibration.
+ */
+static int lbrb_log_delay_sec = 0;
+/**
+ * By default we only act on (lbrb_log_delay_sec>0) when the device
+ * is in calibration mode of whatever nature (directly reported or
+ * assumed from other flag combos). With this flag we do not check
+ * for calibration and only look at LB + RB timestamps.
+ */
+static int lbrb_log_delay_without_calibrating = 0;
+/**
+ * When did we last enter the situation? (if more than lbrb_log_delay_sec
+ * ago, then set the device status and emit the message)
+ */
+static time_t last_lb_start = 0;
+static time_t last_rb_start = 0;
+
 /* support functions */
 static hid_info_t *find_nut_info(const char *varname);
 static hid_info_t *find_hid_info(const HIDData_t *hiddata);
@@ -243,6 +292,8 @@ static status_lkp_t status_info[] = {
 	{ "boost", STATUS(BOOST) },
 	{ "bypassauto", STATUS(BYPASSAUTO) },
 	{ "bypassman", STATUS(BYPASSMAN) },
+	{ "ecomode", STATUS(ECOMODE) },
+	{ "essmode", STATUS(ESSMODE) },
 	{ "off", STATUS(OFF) },
 	{ "cal", STATUS(CALIB) },
 	{ "overheat", STATUS(OVERHEAT) },
@@ -333,6 +384,12 @@ info_lkp_t bypass_manual_info[] = {
 	{ 1, "bypassman", NULL, NULL },
 	{ 0, "!bypassman", NULL, NULL },
 	{ 0, NULL, NULL, NULL }
+};
+info_lkp_t eco_mode_info[] = {
+	{ 0, "normal", NULL, NULL },
+    { 1, "ecomode", NULL, NULL },
+    { 2, "essmode", NULL, NULL },
+    { 0, NULL, NULL, NULL }
 };
 /* note: this value is reverted (0=set, 1=not set). We report "being
    off" rather than "being on", so that devices that don't implement
@@ -931,28 +988,29 @@ int setvar(const char *varname, const char *val)
 
 void upsdrv_shutdown(void)
 {
-	upsdebugx(1, "upsdrv_shutdown...");
+	/* Only implement "shutdown.default"; do not invoke
+	 * general handling of other `sdcommands` here */
 
-	/* Try to shutdown with delay */
-	if (instcmd("shutdown.return", NULL) == STAT_INSTCMD_HANDLED) {
-		/* Shutdown successful */
-		return;
-	}
+	char	*cmd_used = NULL;
 
-	/* If the above doesn't work, try shutdown.reboot */
-	if (instcmd("shutdown.reboot", NULL) == STAT_INSTCMD_HANDLED) {
-		/* Shutdown successful */
-		return;
-	}
+	upsdebugx(1, "%s...", __func__);
 
-	/* If the above doesn't work, try load.off.delay */
-	if (instcmd("load.off.delay", NULL) == STAT_INSTCMD_HANDLED) {
-		/* Shutdown successful */
+	/* By default:
+	 * - Try to shutdown with delay
+	 * - If the above doesn't work, try shutdown.reboot
+	 * - If the above doesn't work, try load.off.delay
+	 * - Finally, try shutdown.stayoff
+	 */
+	if (do_loop_shutdown_commands("shutdown.return,shutdown.reboot,load.off.delay,shutdown.stayoff", &cmd_used) == STAT_INSTCMD_HANDLED) {
+		upslogx(LOG_INFO, "Shutdown successful with '%s'", NUT_STRARG(cmd_used));
+		if (handling_upsdrv_shutdown > 0)
+			set_exit_flag(EF_EXIT_SUCCESS);
 		return;
 	}
 
 	upslogx(LOG_ERR, "Shutdown failed!");
-	set_exit_flag(-1);
+	if (handling_upsdrv_shutdown > 0)
+		set_exit_flag(EF_EXIT_FAILURE);
 }
 
 void upsdrv_help(void)
@@ -1000,6 +1058,8 @@ void upsdrv_makevartable(void)
 
 	addvar(VAR_FLAG, "pollonly", "Don't use interrupt pipe, only use polling");
 
+	addvar(VAR_VALUE, "interrupt_pipe_no_events_tolerance", "How many times in a row do we tolerate \"Got 0 HID objects\" from USB interrupts?");
+
 	addvar(VAR_FLAG, "onlinedischarge",
 		"Set to treat discharging while online as being offline/on-battery (DEPRECATED, use onlinedischarge_onbattery)");
 
@@ -1014,6 +1074,12 @@ void upsdrv_makevartable(void)
 
 	addvar(VAR_VALUE, "onlinedischarge_log_throttle_hovercharge",
 		"Set to throttle log messages about discharging while online (only if battery.charge is under this value)");
+
+	addvar(VAR_VALUE, "lbrb_log_delay_sec",
+		"Set to delay status-setting (and log messages) about device in LB or LB+RB state");
+
+	addvar(VAR_FLAG, "lbrb_log_delay_without_calibrating",
+		"Set to apply lbrb_log_delay_sec even if device is not calibrating");
 
 	addvar(VAR_FLAG, "disable_fix_report_desc",
 		"Set to disable fix-ups for broken USB encoding, etc. which we apply by default on certain vendors/products");
@@ -1067,9 +1133,9 @@ void upsdrv_updateinfo(void)
 
 		upsdebugx(1, "Got to reconnect!");
 		if (use_interrupt_pipe == TRUE && interrupt_pipe_EIO_count > 0) {
-			upsdebugx(0, "\nReconnecting. If you saw \"nut_libusb_get_interrupt: Input/Output Error\" "
+			upsdebugx(0, "Reconnecting. If you saw \"nut_libusb_get_interrupt: Input/Output Error\" "
 				"or similar message in the log above, try setting \"pollonly\" flag in \"ups.conf\" "
-				"options section for this driver!\n");
+				"options section for this driver!");
 		}
 
 		if (!reconnect_ups()) {
@@ -1080,6 +1146,7 @@ void upsdrv_updateinfo(void)
 
 		hd = &curDevice;
 		interrupt_pipe_EIO_count = 0;
+		interrupt_pipe_no_events_count = 0;
 
 		if (hid_ups_walk(HU_WALKMODE_INIT) == FALSE) {
 			hd = NULL;
@@ -1098,6 +1165,16 @@ void upsdrv_updateinfo(void)
 		case LIBUSB_ERROR_BUSY:      /* Device or resource busy */
 			upslog_with_errno(LOG_CRIT, "Got disconnected by another driver");
 			goto fallthrough_reconnect;
+		case NUT_LIBUSB_CODE_NO_EVENTS:	/* No HID Events */
+			interrupt_pipe_no_events_count++;
+			upsdebugx(1, "Got 0 HID objects (%ld times in a row, tolerance is %ld)...",
+				interrupt_pipe_no_events_count, interrupt_pipe_no_events_tolerance);
+			if (interrupt_pipe_no_events_tolerance >= 0
+			 && interrupt_pipe_no_events_tolerance < interrupt_pipe_no_events_count
+			) {
+				goto fallthrough_reconnect;
+			}
+			break;
 #if WITH_LIBUSB_0_1 /* limit to libusb 0.1 implementation */
 		case -EPERM:		/* Operation not permitted */
 #endif
@@ -1121,6 +1198,13 @@ void upsdrv_updateinfo(void)
 			return;
 		default:
 			upsdebugx(1, "Got %i HID objects...", (evtCount >= 0) ? evtCount : 0);
+			if (evtCount > 0)
+				interrupt_pipe_no_events_count = 0;
+			else
+				upsdebugx(1, "Got unhandled result from HIDGetEvents(): %i\n"
+					"Please report it to NUT developers, with an 'upsc' output for your device,\n"
+					"versions of NUT and libusb used, and verbose driver debug log if possible.",
+					evtCount);
 			break;
 		}
 	} else {
@@ -1220,6 +1304,15 @@ void upsdrv_initinfo(void)
 	if (testvar("pollonly")) {
 		use_interrupt_pipe = FALSE;
 	}
+
+	val = getval("interrupt_pipe_no_events_tolerance");
+	if (!val || !str_to_long(val, &interrupt_pipe_no_events_tolerance, 10)) {
+		interrupt_pipe_no_events_tolerance = -1;
+		if (val)
+			upslogx(LOG_WARNING, "Invalid setting for interrupt_pipe_no_events_tolerance: '%s', defaulting to %ld",
+				val, interrupt_pipe_no_events_tolerance);
+	}
+	dstate_setinfo("driver.parameter.interrupt_pipe_no_events_tolerance", "%ld", interrupt_pipe_no_events_tolerance);
 
 	time(&lastpoll);
 
@@ -1367,6 +1460,90 @@ void upsdrv_initups(void)
 		}
 	}
 
+	val = getval("lbrb_log_delay_sec");
+	if (val) {
+		int ipv = atoi(val);
+		if ((ipv == 0 && strcmp("0", val)) || (ipv < 0)) {
+			lbrb_log_delay_sec = 3;
+			upslogx(LOG_WARNING,
+				"Warning: invalid value for "
+				"lbrb_log_delay_sec: %s, "
+				"defaulting to %d",
+				val, lbrb_log_delay_sec);
+		} else {
+			lbrb_log_delay_sec = ipv;
+		}
+	} else {
+		/* Activate APC BXnnnMI/BXnnnnMI tweaks, for details see
+		 * https://github.com/networkupstools/nut/issues/2347
+		 */
+		size_t	productLen = hd->Product ? strlen(hd->Product) : 0;
+
+		/* FIXME: Consider also ups.mfr.date as 2023 or newer?
+		 * Eventually up to some year this gets fixed?
+		 */
+		if (hd->Vendor
+		&&  productLen > 6	/* BXnnnMI at least */
+		&&  (!strcmp(hd->Vendor, "APC") || !strcmp(hd->Vendor, "American Power Conversion"))
+		&&  (strstr(hd->Product, " BX") || strstr(hd->Product, "BX") == hd->Product)
+		&&  (hd->Product[productLen - 2] == 'M' && hd->Product[productLen - 1] == 'I')
+		) {
+			int	got_lbrb_log_delay_without_calibrating = testvar("lbrb_log_delay_without_calibrating") ? 1 : 0,
+				got_onlinedischarge_calibration = testvar("onlinedischarge_calibration") ? 1 : 0,
+				got_onlinedischarge_log_throttle_sec = testvar("onlinedischarge_log_throttle_sec") ? 1 : 0;
+
+			lbrb_log_delay_sec = 3;
+
+			upslogx(LOG_INFO, "Defaulting lbrb_log_delay_sec=%d "
+				"for %s model %s%s%s%s%s%s%s%s%s%s",
+				lbrb_log_delay_sec,
+				hd->Vendor, hd->Product,
+
+				!got_lbrb_log_delay_without_calibrating
+				|| !got_onlinedischarge_calibration
+				|| !got_onlinedischarge_log_throttle_sec
+				? "; consider also setting the " : "",
+
+				!got_lbrb_log_delay_without_calibrating
+				? "lbrb_log_delay_without_calibrating " : "",
+
+				!got_lbrb_log_delay_without_calibrating
+				&& (!got_onlinedischarge_calibration
+				 || !got_onlinedischarge_log_throttle_sec)
+				? "and/or " : "",
+
+				!got_onlinedischarge_calibration
+				? "onlinedischarge_calibration " : "",
+
+				(!got_lbrb_log_delay_without_calibrating
+				|| !got_onlinedischarge_calibration )
+				&& !got_onlinedischarge_log_throttle_sec
+				? "and/or " : "",
+
+				!got_onlinedischarge_log_throttle_sec
+				? "onlinedischarge_log_throttle_sec " : "",
+
+				!got_lbrb_log_delay_without_calibrating
+				|| !got_onlinedischarge_calibration
+				|| !got_onlinedischarge_log_throttle_sec
+				? "flag" : "",
+
+				2 > ( got_lbrb_log_delay_without_calibrating
+				    + got_onlinedischarge_calibration
+				    + got_onlinedischarge_log_throttle_sec)
+				? "(s)" : "",
+
+				!got_lbrb_log_delay_without_calibrating
+				|| !got_onlinedischarge_calibration
+				|| !got_onlinedischarge_log_throttle_sec
+				? " in your configuration" : "");
+		}
+	}
+
+	if (testvar("lbrb_log_delay_without_calibrating")) {
+		lbrb_log_delay_without_calibrating = 1;
+	}
+
 	if (testvar("disable_fix_report_desc")) {
 		disable_fix_report_desc = 1;
 	}
@@ -1461,6 +1638,11 @@ void possibly_supported(const char *mfr, HIDDevice_t *arghd)
 "'-x productid=%04x' option. Please report your results to the NUT user's\n"
 "mailing list <nut-upsuser@lists.alioth.debian.org>.\n",
 	mfr, arghd->VendorID, arghd->ProductID, arghd->ProductID);
+
+	if (arghd->VendorID == 0x06da) {
+		upsdebugx(0,
+"Please note that this Vendor ID is also known in devices supported by nutdrv_qx");
+	}
 }
 
 /* Update ups_status to remember this status item. Interpretation is
@@ -1954,6 +2136,9 @@ static void ups_alarm_set(void)
 	if (ups_status & STATUS(BYPASSMAN)) {
 		alarm_set("Manual bypass mode!");
 	}
+	/*if (ups_status & STATUS(ECOMODE)) {
+		alarm_set("ECO(HE) mode!");
+	}*/ /* disable alarm for eco as we dont want raise alarm ? */
 }
 
 /* Return the current value of ups_status */
@@ -1962,10 +2147,49 @@ unsigned ups_status_get(void)
 	return ups_status;
 }
 
+/** Helper to both status_set("CAL") and track last_calibration_start timestamp */
+static void status_set_CAL(void)
+{
+	/* Note: dstate tokens can only be set, not cleared; a
+	 * dstate_init() wipes the whole internal buffer though. */
+	int	wasSet = status_get("CAL");
+	time_t	now;
+
+	time(&now);
+
+	/* A few sanity checks */
+	if (wasSet) {
+		if (!last_calibration_start) {
+			upsdebugx(2, "%s: status was already set but not time-stamped: CAL", __func__);
+		} else {
+			upsdebugx(2, "%s: status was already set %f sec ago : CAL",
+				__func__, difftime(now, last_calibration_start));
+		}
+	} else {
+		if (last_calibration_finish) {
+			upsdebugx(2, "%s: starting a new calibration, last one finished %f sec ago",
+				__func__, difftime(now, last_calibration_finish));
+		} else {
+			upsdebugx(2, "%s: starting a new calibration, first in this driver's lifetime",
+				__func__);
+		}
+	}
+
+	if (!last_calibration_start) {
+		last_calibration_start = now;
+	}
+
+	if (!wasSet) {
+		status_set("CAL");		/* calibration */
+	}
+}
+
 /* Convert the local status information to NUT format and set NUT
    status. */
 static void ups_status_set(void)
 {
+	int	isCalibrating = 0;
+
 	if (ups_status & STATUS(VRANGE)) {
 		dstate_setinfo("input.transfer.reason", "input voltage out of range");
 	} else if (ups_status & STATUS(FRANGE)) {
@@ -1981,7 +2205,7 @@ static void ups_status_set(void)
 	 * raise FSD urgently. So we first let upsmon know it is just a drill.
 	 */
 	if (ups_status & STATUS(CALIB)) {
-		status_set("CAL");		/* calibration */
+		status_set_CAL();		/* calibration */
 	}
 
 	if ((!(ups_status & STATUS(DISCHRG))) && (
@@ -2004,7 +2228,7 @@ static void ups_status_set(void)
 		/* if online but discharging */
 		if (onlinedischarge_calibration) {
 			/* if we treat OL+DISCHRG as calibrating */
-			status_set("CAL");	/* calibration */
+			status_set_CAL();	/* calibration */
 		}
 
 		if (onlinedischarge_onbattery) {
@@ -2148,6 +2372,8 @@ static void ups_status_set(void)
 		status_set("OL");
 	}
 
+	isCalibrating = status_get("CAL");
+
 	if ((ups_status & STATUS(DISCHRG)) &&
 		!(ups_status & STATUS(DEPLETED))) {
 		status_set("DISCHRG");		/* discharging */
@@ -2157,13 +2383,58 @@ static void ups_status_set(void)
 		status_set("CHRG");		/* charging */
 	}
 	if (ups_status & (STATUS(LOWBATT) | STATUS(TIMELIMITEXP) | STATUS(SHUTDOWNIMM))) {
-		status_set("LB");		/* low battery */
+		if (lbrb_log_delay_sec < 1
+		|| (!isCalibrating && !lbrb_log_delay_without_calibrating)
+		|| !(ups_status & STATUS(ONLINE))	/* assume actual power failure, do not delay */
+		) {
+			/* Quick and easy decision */
+			status_set("LB");		/* low battery */
+		} else {
+			time_t	now;
+			time(&now);
+
+			if (!last_lb_start) {
+				last_lb_start = now;
+			} else {
+				if (difftime(now, last_lb_start) > lbrb_log_delay_sec) {
+					/* Patience expired */
+					status_set("LB");	/* low battery */
+				} else {
+					upsdebugx(2, "%s: throttling LB status due to lbrb_log_delay_sec", __func__);
+				}
+			}
+		}
+	} else {
+		last_lb_start = 0;
 	}
 	if (ups_status & STATUS(OVERLOAD)) {
 		status_set("OVER");		/* overload */
 	}
-	if (ups_status & STATUS(REPLACEBATT)) {
-		status_set("RB");		/* replace batt */
+	if ((ups_status & STATUS(REPLACEBATT)) || (ups_status & STATUS(NOBATTERY))) {
+		if (lbrb_log_delay_sec < 1
+		|| (!isCalibrating && !lbrb_log_delay_without_calibrating)
+		|| !last_lb_start	/* Calibration ended (not LB anymore) */
+		|| !(ups_status & STATUS(ONLINE))	/* assume actual power failure, do not delay */
+		) {
+			/* Quick and easy decision */
+			status_set("RB");		/* replace batt */
+		} else {
+			time_t	now;
+			time(&now);
+
+			if (!last_rb_start) {
+				last_rb_start = now;
+			} else {
+				if (difftime(now, last_rb_start) > lbrb_log_delay_sec) {
+					/* Patience expired */
+					status_set("RB");	/* replace batt */
+				} else {
+					upsdebugx(2, "%s: throttling RB status due to lbrb_log_delay_sec", __func__);
+				}
+			}
+		}
+	} else {
+		last_rb_start = 0;
 	}
 	if (ups_status & STATUS(TRIM)) {
 		status_set("TRIM");		/* SmartTrim */
@@ -2174,8 +2445,23 @@ static void ups_status_set(void)
 	if (ups_status & (STATUS(BYPASSAUTO) | STATUS(BYPASSMAN))) {
 		status_set("BYPASS");		/* on bypass */
 	}
+	if (ups_status & STATUS(ECOMODE)) {
+		status_set("ECO");		/* on ECO(HE) Mode */
+	}
+	if (ups_status & STATUS(ESSMODE)) {
+		status_set("ESS");		/* on ESS Mode */
+	}
 	if (ups_status & STATUS(OFF)) {
 		status_set("OFF");		/* ups is off */
+	}
+
+	if (!isCalibrating) {
+		if (last_calibration_start) {
+			time(&last_calibration_finish);
+			upsdebugx(2, "%s: calibration is no longer in place, took %f sec",
+				__func__, difftime(last_calibration_finish, last_calibration_start));
+		}
+		last_calibration_start = 0;
 	}
 }
 

@@ -620,6 +620,9 @@ const char *upscli_strerror(UPSCONN_t *ups)
 			upscli_errlist[ups->upserror].str,
 			ups->pc_ctx.errmsg);
 		return ups->errbuf;
+
+	default:
+		break;
 	}
 
 #ifdef HAVE_PRAGMAS_FOR_GCC_DIAGNOSTIC_IGNORED_FORMAT_NONLITERAL
@@ -1025,7 +1028,7 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, uint16_t port, int flags
 	ups->fd = -1;
 
 	if (!host) {
-		upslogx(LOG_WARNING, "%s: Host not found: '%s'", __func__, NUT_STRARG(host));
+		upslogx(LOG_WARNING, "%s: Host not specified", __func__);
 		ups->upserror = UPSCLI_ERR_NOSUCHHOST;
 		return -1;
 	}
@@ -1059,6 +1062,8 @@ int upscli_tryconnect(UPSCONN_t *ups, const char *host, uint16_t port, int flags
 			return -1;
 		case EAI_SYSTEM:
 			ups->syserrno = errno;
+			break;
+		default:
 			break;
 		}
 

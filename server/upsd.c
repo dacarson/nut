@@ -465,10 +465,12 @@ static void setuptcp(stype_t *server)
 			fatal_with_errno(EXIT_FAILURE, "setuptcp: setsockopt");
 		}
 
+#ifdef IPV6_V6ONLY
 		/* Ordinarily we request that IPv6 listeners handle only IPv6
 		 * and not IPv4 mapped addresses - if the OS would honour that.
 		 * TOTHINK: Does any platform need `#ifdef IPV6_V6ONLY` given
 		 * that we apparently already have AF_INET6 OS support everywhere?
+		 * YES: Solaris 8 has IPv6 but not this symbol.
 		 */
 		if (ai->ai_family == AF_INET6) {
 			if (setsockopt(sock_fd, IPPROTO_IPV6, IPV6_V6ONLY, (void *)&one, sizeof(one)) != 0) {
@@ -476,6 +478,7 @@ static void setuptcp(stype_t *server)
 				/* ack, ignore */
 			}
 		}
+#endif
 
 		if (bind(sock_fd, ai->ai_addr, ai->ai_addrlen) < 0) {
 			upsdebug_with_errno(3, "setuptcp: bind");
@@ -1320,6 +1323,8 @@ char *tracking_get(const char *id)
 			return "ERR INVALID-ARGUMENT";
 		case STAT_FAILED:
 			return "ERR FAILED";
+		default:
+			break;
 		}
 	}
 
@@ -1808,9 +1813,10 @@ static void help(const char *arg_progname)
 
 static void help(const char *arg_progname)
 {
-	printf("Network server for UPS data.\n\n");
-	printf("usage: %s [OPTIONS]\n", arg_progname);
+	print_banner_once(arg_progname, 2);
+	printf("NUT network data server for UPS monitoring and management.\n");
 
+	printf("\nusage: %s [OPTIONS]\n", arg_progname);
 	printf("\n");
 	printf("  -c <command>	send <command> via signal to background process\n");
 	printf("		commands:\n");
@@ -1932,8 +1938,7 @@ int main(int argc, char **argv)
 	/* set up some things for later */
 	snprintf(pidfn, sizeof(pidfn), "%s/%s.pid", altpidpath(), progname);
 
-	printf("Network UPS Tools %s %s\n", progname, UPS_VERSION);
-	fflush(stdout);
+	print_banner_once(progname, 0);
 
 	while ((i = getopt(argc, argv, "+h46p:qr:i:fu:Vc:P:DFB")) != -1) {
 		switch (i) {
@@ -1959,9 +1964,10 @@ int main(int argc, char **argv)
 				break;
 
 			case 'V':
-				/* Note - we already printed the banner for program name */
+				/* just show the version and optional
+				 * CONFIG_FLAGS banner if available */
+				print_banner_once(progname, 1);
 				nut_report_config_flags();
-
 				exit(EXIT_SUCCESS);
 
 			case 'c':

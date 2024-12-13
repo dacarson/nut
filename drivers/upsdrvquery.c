@@ -158,27 +158,48 @@ udq_pipe_conn_t *upsdrvquery_connect(const char *sockfn) {
 }
 
 udq_pipe_conn_t *upsdrvquery_connect_drvname_upsname(const char *drvname, const char *upsname) {
-	char	pidfn[SMALLBUF];
+	char	sockname[SMALLBUF];
 #ifndef WIN32
 	struct stat     fs;
-	snprintf(pidfn, sizeof(pidfn), "%s/%s-%s",
+	snprintf(sockname, sizeof(sockname), "%s/%s-%s",
 		dflt_statepath(), drvname, upsname);
-	check_unix_socket_filename(pidfn);
-	if (stat(pidfn, &fs)) {
+	check_unix_socket_filename(sockname);
+	if (stat(sockname, &fs)) {
 		if (nut_debug_level > 0 || nut_upsdrvquery_debug_level >= NUT_UPSDRVQUERY_DEBUG_LEVEL_CONNECT)
-			upslog_with_errno(LOG_ERR, "Can't open %s", pidfn);
+			upslog_with_errno(LOG_ERR, "Can't open %s", sockname);
 		return NULL;
 	}
 #else
-	snprintf(pidfn, sizeof(pidfn), "\\\\.\\pipe\\%s-%s", drvname, upsname);
+	snprintf(sockname, sizeof(sockname), "\\\\.\\pipe\\%s-%s", drvname, upsname);
 #endif  /* WIN32 */
 
-	return upsdrvquery_connect(pidfn);
+	return upsdrvquery_connect(sockname);
 }
 
 void upsdrvquery_close(udq_pipe_conn_t *conn) {
+#ifdef WIN32
+	int	loggedOut = 0;
+#endif  /* WIN32 */
+
 	if (!conn)
 		return;
+
+	if (VALID_FD(conn->sockfd)) {
+		int	nudl = nut_upsdrvquery_debug_level;
+		ssize_t ret;
+		upsdebugx(5, "%s: closing driver socket, try to say goodbye", __func__);
+		ret = upsdrvquery_write(conn, "LOGOUT\n");
+		if (7 <= ret) {
+			upsdebugx(5, "%s: okay", __func__);
+#ifdef WIN32
+			loggedOut = 1;
+#endif  /* WIN32 */
+			usleep(1000000);
+		} else {
+			upsdebugx(5, "%s: must have been closed on the other side", __func__);
+		}
+		nut_upsdrvquery_debug_level = nudl;
+	}
 
 #ifndef WIN32
 	if (VALID_FD(conn->sockfd))
@@ -190,7 +211,7 @@ void upsdrvquery_close(udq_pipe_conn_t *conn) {
 	memset(&(conn->overlapped), 0, sizeof(conn->overlapped));
 
 	if (VALID_FD(conn->sockfd)) {
-		if (DisconnectNamedPipe(conn->sockfd) == 0) {
+		if (DisconnectNamedPipe(conn->sockfd) == 0 && !loggedOut) {
 			if (nut_debug_level > 0 || nut_upsdrvquery_debug_level >= NUT_UPSDRVQUERY_DEBUG_LEVEL_CONNECT)
 				upslogx(LOG_ERR,
 					"DisconnectNamedPipe error : %d",
@@ -217,6 +238,11 @@ ssize_t upsdrvquery_read_timeout(udq_pipe_conn_t *conn, struct timeval tv) {
 	struct timeval	start, now, presleep;
 #endif
 
+	upsdebugx(5, "%s: tv={sec=%" PRIiMAX ", usec=%06" PRIiMAX "}%s",
+		__func__, (intmax_t)tv.tv_sec, (intmax_t)tv.tv_usec,
+		tv.tv_sec < 0 || tv.tv_usec < 0 ? " (unlimited timeout)" : ""
+		);
+
 	if (!conn || INVALID_FD(conn->sockfd)) {
 		if (nut_debug_level > 0 || nut_upsdrvquery_debug_level >= NUT_UPSDRVQUERY_DEBUG_LEVEL_CONNECT)
 			upslog_with_errno(LOG_ERR, "socket not initialized");
@@ -227,7 +253,7 @@ ssize_t upsdrvquery_read_timeout(udq_pipe_conn_t *conn, struct timeval tv) {
 	FD_ZERO(&rfds);
 	FD_SET(conn->sockfd, &rfds);
 
-	if (select(conn->sockfd + 1, &rfds, NULL, NULL, &tv) < 0) {
+	if (select(conn->sockfd + 1, &rfds, NULL, NULL, tv.tv_sec < 0 || tv.tv_usec < 0 ? NULL : &tv) < 0) {
 		if (nut_debug_level > 0 || nut_upsdrvquery_debug_level >= NUT_UPSDRVQUERY_DEBUG_LEVEL_DIALOG)
 			upslog_with_errno(LOG_ERR, "select with socket");
 		/* upsdrvquery_close(conn); */

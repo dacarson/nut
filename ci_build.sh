@@ -470,7 +470,7 @@ if [ -z "${CANBUILD_LIBGD_CGI-}" ]; then
 
     # NUT CI farm with Jenkins can build it; Travis could not
     [[ "$CI_OS_NAME" = "freebsd" ]] && CANBUILD_LIBGD_CGI=yes \
-    || [[ "$TRAVIS_OS_NAME" = "freebsd" ]] && CANBUILD_LIBGD_CGI=no
+    || { [[ "$TRAVIS_OS_NAME" = "freebsd" ]] && CANBUILD_LIBGD_CGI=no ; }
 
     # See also below for some compiler-dependent decisions
 fi
@@ -667,7 +667,9 @@ check_gitignore() {
     # Shell-glob filename pattern for points of interest to git status
     # and git diff; note that filenames starting with a dot should be
     # reported by `git status -- '*'` and not hidden.
-    [ -n "${FILE_GLOB-}" ] || FILE_GLOB='*'
+    [ -n "${FILE_GLOB-}" ] || FILE_GLOB="'*'"
+    # Always filter these names away:
+    FILE_GLOB_EXCLUDE="':!.ci*.log*' ':!VERSION_DEFAULT' ':!VERSION_FORCED*'"
     [ -n "${GIT_ARGS-}" ] || GIT_ARGS='' # e.g. GIT_ARGS="--ignored"
     # Display contents of the diff?
     # (Helps copy-paste from CI logs to source to amend quickly)
@@ -682,12 +684,11 @@ check_gitignore() {
 
     # One invocation should report to log if there was any discrepancy
     # to report in the first place (GITOUT may be empty without error):
-    GITOUT="`git status $GIT_ARGS -s -- "${FILE_GLOB}"`" \
+    GITOUT="`git status $GIT_ARGS -s -- ${FILE_GLOB} ${FILE_GLOB_EXCLUDE}`" \
     || { echo "WARNING: Could not query git repo while in `pwd`" >&2 ; GITOUT=""; }
 
     if [ -n "${GITOUT-}" ] ; then
         echo "$GITOUT" \
-        | grep -E -v '^.. \.ci.*\.log.*' \
         | grep -E "${FILE_REGEX}"
     else
         echo "Got no output and no errors querying git repo while in `pwd`: seems clean" >&2
@@ -695,17 +696,56 @@ check_gitignore() {
     echo "==="
 
     # Another invocation checks that there was nothing to complain about:
-    if [ -n "`git status $GIT_ARGS -s "${FILE_GLOB}" | grep -E -v '^.. \.ci.*\.log.*' | grep -E "^.. ${FILE_REGEX}"`" ] \
+    if [ -n "`git status $GIT_ARGS -s ${FILE_GLOB} ${FILE_GLOB_EXCLUDE} | grep -E "^.. ${FILE_REGEX}"`" ] \
     && [ "$CI_REQUIRE_GOOD_GITIGNORE" != false ] \
     ; then
         echo "FATAL: There are changes in $FILE_DESCR files listed above - tracked sources should be updated in the PR (even if generated - not all builders can do so), and build products should be added to a .gitignore file, everything made should be cleaned and no tracked files should be removed! You can 'export CI_REQUIRE_GOOD_GITIGNORE=false' if appropriate." >&2
         if [ "$GIT_DIFF_SHOW" = true ]; then
-            PAGER=cat git diff -- "${FILE_GLOB}" || true
+            PAGER=cat git diff -- ${FILE_GLOB} ${FILE_GLOB_EXCLUDE} || true
         fi
         echo "==="
         return 1
     fi
     return 0
+}
+
+consider_cleanup_shortcut() {
+    # Note: modern auto(re)conf requires pkg-config to generate the configure
+    # script, so to stage the situation of building without one (as if on an
+    # older system) we have to remove it when we already have the script.
+    # This matches the use-case of distro-building from release tarballs that
+    # include all needed pre-generated files to rely less on OS facilities.
+    DO_REGENERATE=false
+    if [ x"${CI_REGENERATE}" = xtrue ] ; then
+        echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because CI_REGENERATE='${CI_REGENERATE}'"
+        DO_REGENERATE=true
+    fi
+
+    if [ -s Makefile ]; then
+        if [ -n "`find "${SCRIPTDIR}" -name configure.ac -newer "${CI_BUILDDIR}"/configure`" ] \
+        || [ -n "`find "${SCRIPTDIR}" -name '*.m4' -newer "${CI_BUILDDIR}"/configure`" ] \
+        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile`" ] \
+        || [ -n "`find "${SCRIPTDIR}" -name Makefile.in -newer "${CI_BUILDDIR}"/Makefile`" ] \
+        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile.in`" ] \
+        ; then
+            # Avoid reconfiguring just for the sake of distclean
+            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because recipes changed"
+            DO_REGENERATE=true
+        fi
+    fi
+
+    # When itertating configure.ac or m4 sources, we can end up with an
+    # existing but useless scropt file - nuke it and restart from scratch!
+    if [ -s "${CI_BUILDDIR}"/configure ] ; then
+        if ! sh -n "${CI_BUILDDIR}"/configure 2>/dev/null ; then
+            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because current configure script syntax is broken"
+            DO_REGENERATE=true
+        fi
+    fi
+
+    if $DO_REGENERATE ; then
+        rm -f "${CI_BUILDDIR}"/Makefile "${CI_BUILDDIR}"/configure "${CI_BUILDDIR}"/include/config.h "${CI_BUILDDIR}"/include/config.h.in "${CI_BUILDDIR}"'/include/config.h.in~'
+    fi
 }
 
 can_clean_check() {
@@ -1003,6 +1043,27 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
                         echo "WARNING: Seems we are running with gcc-4.x or older on $CI_OS_NAME, which last had known issues with libgd; disabling CGI for this build"
                         CANBUILD_LIBGD_CGI=no
                         ;;
+                    *)
+                        case "${ARCH}${BITS}${ARCH_BITS}" in
+                            *64*|*sparcv9*) ;;
+                            *)
+                                # GCC-7 (maybe other older compilers) could default
+                                # to 32-bit builds, and the 32-bit libfontconfig.so
+                                # and libfreetype.so are absent for some years now
+                                # (while libgd.so still claims to exist).
+                                echo "WARNING: Seems we are running with gcc on $CI_OS_NAME, which last had known issues with libgd on non-64-bit builds; making CGI optional for this build"
+                                CANBUILD_LIBGD_CGI=auto
+                                ;;
+                        esac
+                        ;;
+                esac
+            else
+                case "${ARCH}${BITS}${ARCH_BITS}" in
+                    *64*|*sparcv9*) ;;
+                    *)
+                        echo "WARNING: Seems we are running with $COMPILER_FAMILY on $CI_OS_NAME, which last had known issues with libgd on non-64-bit builds; making CGI optional for this build"
+                        CANBUILD_LIBGD_CGI=auto
+                        ;;
                 esac
             fi
         fi
@@ -1020,7 +1081,7 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
                     SYS_PKG_CONFIG_PATH="/usr/lib/32/pkgconfig:/usr/lib/pkgconfig:/usr/lib/i86pc/pkgconfig:/usr/lib/i386/pkgconfig:/usr/lib/sparcv7/pkgconfig"
                     ;;
                 *)
-                    case "$ARCH$BITS" in
+                    case "${ARCH}${BITS}${ARCH_BITS}" in
                         *64*)
                             SYS_PKG_CONFIG_PATH="/usr/lib/64/pkgconfig:/usr/lib/amd64/pkgconfig:/usr/lib/sparcv9/pkgconfig:/usr/lib/pkgconfig"
                             ;;
@@ -1036,6 +1097,7 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
             # * /usr/local on macos x86
             # * /opt/homebrew on macos Apple Silicon
             if [ -n "${HOMEBREW_PREFIX-}" -a -d "${HOMEBREW_PREFIX-}" ]; then
+                echo "Homebrew: export general pkg-config location and C/C++/LD flags for the platform"
                 SYS_PKG_CONFIG_PATH="${HOMEBREW_PREFIX}/lib/pkgconfig"
                 CFLAGS="${CFLAGS-} -Wno-poison-system-directories -Wno-deprecated-declarations -isystem ${HOMEBREW_PREFIX}/include -I${HOMEBREW_PREFIX}/include"
                 #CPPFLAGS="${CPPFLAGS-} -Wno-poison-system-directories -Wno-deprecated-declarations -isystem ${HOMEBREW_PREFIX}/include -I${HOMEBREW_PREFIX}/include"
@@ -1046,8 +1108,9 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
                 # so explicit args are needed
                 checkFSobj="${HOMEBREW_PREFIX}/opt/net-snmp/lib/pkgconfig"
                 if [ -d "$checkFSobj" -a ! -e "${HOMEBREW_PREFIX}/lib/pkgconfig/netsnmp.pc" ] ; then
-                    echo "Homebrew: export flags for Net-SNMP"
+                    echo "Homebrew: export pkg-config location for Net-SNMP"
                     SYS_PKG_CONFIG_PATH="$SYS_PKG_CONFIG_PATH:$checkFSobj"
+                    #echo "Homebrew: export flags for Net-SNMP"
                     #CONFIG_OPTS+=("--with-snmp-includes=-isystem ${HOMEBREW_PREFIX}/opt/net-snmp/include -I${HOMEBREW_PREFIX}/opt/net-snmp/include")
                     #CONFIG_OPTS+=("--with-snmp-libs=-L${HOMEBREW_PREFIX}/opt/net-snmp/lib")
                 fi
@@ -1081,7 +1144,9 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
                     fi
                 fi
             else
-                echo "WARNING: It seems you are building on MacOS, but HOMEBREW_PREFIX is not set or valid; it can help with auto-detection of some features!"
+                echo "WARNING: It seems you are building on MacOS, but HOMEBREW_PREFIX is not set or valid."
+                echo 'If you do use this build system, try running   eval "$(brew shellenv)"'
+                echo "in your terminal or shell profile, it can help with auto-detection of some features!"
             fi
             ;;
     esac
@@ -1279,7 +1344,9 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
             if [ "${CANBUILD_LIBGD_CGI-}" != "no" ] && [ "${BUILD_LIBGD_CGI-}" != "auto" ]  ; then
                 # Currently --with-all implies this, but better be sure to
                 # really build everything we can to be certain it builds:
-                if $PKG_CONFIG --exists libgd || $PKG_CONFIG --exists libgd2 || $PKG_CONFIG --exists libgd3 || $PKG_CONFIG --exists gdlib || $PKG_CONFIG --exists gd ; then
+                if [ "${CANBUILD_LIBGD_CGI-}" != "auto" ] && (
+                   $PKG_CONFIG --exists libgd || $PKG_CONFIG --exists libgd2 || $PKG_CONFIG --exists libgd3 || $PKG_CONFIG --exists gdlib || $PKG_CONFIG --exists gd 
+                ) ; then
                     CONFIG_OPTS+=("--with-cgi=yes")
                 else
                     # Note: CI-wise, our goal IS to test as much as we can
@@ -1289,7 +1356,11 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
                     CONFIG_OPTS+=("--with-cgi=auto")
                 fi
             else
-                CONFIG_OPTS+=("--with-cgi=auto")
+                if [ "${CANBUILD_LIBGD_CGI-}" = "no" ] ; then
+                    CONFIG_OPTS+=("--without-cgi")
+                else
+                    CONFIG_OPTS+=("--with-cgi=auto")
+                fi
             fi
             ;;
         "default-alldrv:no-distcheck")
@@ -1433,38 +1504,13 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
         CONFIG_OPTS+=("--with-debuginfo=${BUILD_DEBUGINFO}")
     fi
 
-    # Note: modern auto(re)conf requires pkg-config to generate the configure
-    # script, so to stage the situation of building without one (as if on an
-    # older system) we have to remove it when we already have the script.
-    # This matches the use-case of distro-building from release tarballs that
-    # include all needed pre-generated files to rely less on OS facilities.
-    if [ -s Makefile ]; then
-        if [ -n "`find "${SCRIPTDIR}" -name configure.ac -newer "${CI_BUILDDIR}"/configure`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name '*.m4' -newer "${CI_BUILDDIR}"/configure`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.in -newer "${CI_BUILDDIR}"/Makefile`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile.in`" ] \
-        ; then
-            # Avoid reconfiguring for the sake of distclean
-            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because recipes changed"
-            rm -f "${CI_BUILDDIR}"/Makefile "${CI_BUILDDIR}"/configure
-        fi
-    fi
-
-    # When itertating configure.ac or m4 sources, we can end up with an
-    # existing but useless scropt file - nuke it and restart from scratch!
-    if [ -s "${CI_BUILDDIR}"/configure ] ; then
-        if ! sh -n "${CI_BUILDDIR}"/configure 2>/dev/null ; then
-            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because current configure script syntax is broken"
-            rm -f "${CI_BUILDDIR}"/Makefile "${CI_BUILDDIR}"/configure
-        fi
-    fi
+    consider_cleanup_shortcut
 
     if [ -s Makefile ]; then
         # Let initial clean-up be at default verbosity
 
         # Handle Ctrl+C with helpful suggestions:
-        trap 'echo "!!! If clean-up looped remaking the configure script for maintainer-clean, try to:"; echo "    rm -f Makefile configure ; $0 $SCRIPT_ARGS"' 2
+        trap 'echo "!!! If clean-up looped remaking the configure script for maintainer-clean, try to:"; echo "    rm -f Makefile configure include/config.h* ; $0 $SCRIPT_ARGS"' 2
 
         echo "=== Starting initial clean-up (from old build products)"
         case "$MAKE_FLAGS $MAKE_FLAGS_CLEAN" in
@@ -1504,7 +1550,11 @@ default|default-alldrv|default-alldrv:no-distcheck|default-all-errors|default-sp
             # e.g. distcheck-light, distcheck-valgrind, cppcheck, maybe
             # others later, as defined in Makefile.am:
             BUILD_TGT="`echo "$BUILD_TYPE" | sed 's,^default-tgt:,,'`"
-            echo "`date`: Starting the sequential build attempt for singular target $BUILD_TGT..."
+            if [ -n "${PARMAKE_FLAGS}" ]; then
+                echo "`date`: Starting the parallel build attempt for singular target $BUILD_TGT..."
+            else
+                echo "`date`: Starting the sequential build attempt for singular target $BUILD_TGT..."
+            fi
 
             # Note: Makefile.am already sets some default DISTCHECK_CONFIGURE_FLAGS
             # that include DISTCHECK_FLAGS if provided
@@ -2055,27 +2105,8 @@ bindings)
     fi
 
     cd "${SCRIPTDIR}"
-    if [ -s Makefile ]; then
-        if [ -n "`find "${SCRIPTDIR}" -name configure.ac -newer "${CI_BUILDDIR}"/configure`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name '*.m4' -newer "${CI_BUILDDIR}"/configure`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.in -newer "${CI_BUILDDIR}"/Makefile`" ] \
-        || [ -n "`find "${SCRIPTDIR}" -name Makefile.am -newer "${CI_BUILDDIR}"/Makefile.in`" ] \
-        ; then
-            # Avoid reconfiguring for the sake of distclean
-            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because recipes changed"
-            rm -f "${CI_BUILDDIR}"/Makefile "${CI_BUILDDIR}"/configure
-        fi
-    fi
 
-    # When itertating configure.ac or m4 sources, we can end up with an
-    # existing but useless scropt file - nuke it and restart from scratch!
-    if [ -s "${CI_BUILDDIR}"/configure ] ; then
-        if ! sh -n "${CI_BUILDDIR}"/configure 2>/dev/null ; then
-            echo "=== Starting initial clean-up (from old build products): TAKING SHORTCUT because current configure script syntax is broken"
-            rm -f "${CI_BUILDDIR}"/Makefile "${CI_BUILDDIR}"/configure
-        fi
-    fi
+    consider_cleanup_shortcut
 
     if [ -s Makefile ]; then
         # Help developers debug:
