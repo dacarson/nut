@@ -410,7 +410,7 @@ static void get_charge_level(void)
     battery_charge_level = data;
 
     upsdebugx(1, "Battery Charge Level: %d%%", data);
-    dstate_setinfo("battery.charge", "%d", data);
+    dstate_setinfo("battery.charge", "%u", data);
 }
 
 static void get_output_voltage(void)
