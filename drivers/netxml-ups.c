@@ -50,7 +50,7 @@
 #ifdef WIN32 /* FIXME ?? skip alarm handling */
 #define HAVE_NE_SET_CONNECT_TIMEOUT  1
 #define HAVE_NE_SOCK_CONNECT_TIMEOUT 1
-#endif
+#endif	/* WIN32 */
 
 /* driver description structure */
 upsdrv_info_t	upsdrv_info = {
@@ -283,10 +283,11 @@ void upsdrv_initinfo(void)
 		dstate_setinfo("driver.version.data", "%s", subdriver->version);
 
 		if (testvar("subscribe") && (netxml_alarm_subscribe(subdriver->subscribe) == NE_OK)) {
-/* TODO: port extrafd to Windows */
 #ifndef WIN32
 			extrafd = ne_sock_fd(sock);
-#endif
+#else	/* WIN32 */
+			NUT_WIN32_INCOMPLETE_DETAILED("TODO: port extrafd to Windows");
+#endif	/* WIN32 */
 			time(&lastheard);
 		}
 
@@ -342,19 +343,23 @@ void upsdrv_updateinfo(void)
 			ne_sock_close(sock);
 
 			if (netxml_alarm_subscribe(subdriver->subscribe) == NE_OK) {
-/* TODO: port extrafd to Windows */
 #ifndef WIN32
 				extrafd = ne_sock_fd(sock);
-#endif
+#else	/* WIN32 */
+				NUT_WIN32_INCOMPLETE_DETAILED("TODO: port extrafd to Windows");
+#endif	/* WIN32 */
 				time(&lastheard);
 				return;
 			}
 
 			dstate_datastale();
-/* TODO: port extrafd to Windows */
+
 #ifndef WIN32
 			extrafd = ERROR_FD;
-#endif
+#else	/* WIN32 */
+			NUT_WIN32_INCOMPLETE_DETAILED("TODO: port extrafd to Windows");
+#endif	/* WIN32 */
+
 			return;
 		}
 	}
@@ -637,7 +642,7 @@ void upsdrv_initups(void)
 		uri.port = ne_uri_defaultport(uri.scheme);
 	}
 
-	upsdebugx(1, "using %s://%s port %d", uri.scheme, uri.host, uri.port);
+	upsdebugx(1, "using %s://%s port %u", uri.scheme, uri.host, uri.port);
 
 	session = ne_session_create(uri.scheme, uri.host, uri.port);
 
@@ -661,9 +666,9 @@ void upsdrv_initups(void)
 	if (!nut_debug_level) {
 #ifndef WIN32
 		fp = fopen("/dev/null", "w");
-#else
+#else	/* WIN32 */
 		fp = fopen("nul", "w");
-#endif
+#endif	/* WIN32 */
 	} else {
 		fp = stderr;
 	}
@@ -870,7 +875,7 @@ static int netxml_alarm_subscribe(const char *page)
 
 	for (ai = ne_addr_first(addr); ai != NULL; ai = ne_addr_next(addr)) {
 
-		upsdebugx(2, "%s: connecting to host %s port %d", __func__, ne_iaddr_print(ai, buf, sizeof(buf)), port);
+		upsdebugx(2, "%s: connecting to host %s port %u", __func__, ne_iaddr_print(ai, buf, sizeof(buf)), port);
 
 #ifndef HAVE_NE_SOCK_CONNECT_TIMEOUT
 		alarm(timeout+1);
@@ -893,7 +898,7 @@ static int netxml_alarm_subscribe(const char *page)
 		return NE_RETRY;
 	}
 
-	snprintf(buf, sizeof(buf), "<Subscription Identification=\"%u\"></Subscription>", secret);
+	snprintf(buf, sizeof(buf), "<Subscription Identification=\"%u\"></Subscription>", (unsigned int)secret);
 	ret = ne_sock_fullwrite(sock, buf, strlen(buf) + 1);
 
 	if (ret != NE_OK) {

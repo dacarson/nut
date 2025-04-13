@@ -7,7 +7,7 @@ AC_DEFUN([NUT_CHECK_LIBGD],
 [
 if test -z "${nut_have_libgd_seen}"; then
 	nut_have_libgd_seen=yes
-	NUT_CHECK_PKGCONFIG
+	AC_REQUIRE([NUT_CHECK_PKGCONFIG])
 
 	CFLAGS_ORIG="${CFLAGS}"
 	LDFLAGS_ORIG="${LDFLAGS}"
@@ -19,7 +19,9 @@ if test -z "${nut_have_libgd_seen}"; then
 	depLDFLAGS=""
 	depLIBS=""
 
-	dnl ### AC_MSG_NOTICE([LIBGD (before): CFLAGS_ORIG="${CFLAGS_ORIG}" CXXFLAGS_ORIG="${CXXFLAGS_ORIG}" CPPFLAGS_ORIG="${CPPFLAGS_ORIG}" LDFLAGS_ORIG="${LDFLAGS_ORIG}" LIBS_ORIG="${LIBS_ORIG}"])
+	AS_IF([test x"${nut_enable_configure_debug}" = xyes], [
+		AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) LIBGD (before): CFLAGS_ORIG="${CFLAGS_ORIG}" CXXFLAGS_ORIG="${CXXFLAGS_ORIG}" CPPFLAGS_ORIG="${CPPFLAGS_ORIG}" LDFLAGS_ORIG="${LDFLAGS_ORIG}" LIBS_ORIG="${LIBS_ORIG}"])
+	])
 
 	AS_IF([test x"$have_PKG_CONFIG" = xyes],
 		[AC_MSG_CHECKING(for gd version via pkg-config)

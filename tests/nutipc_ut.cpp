@@ -5,7 +5,7 @@
 
             \author Vaclav Krpec <VaclavKrpec@Eaton.com>
 
-        Copyright (C) 2024
+        Copyright (C) 2024-2025
 
             \author Jim Klimov <jimklimov+nut@gmail.com>
 
@@ -70,8 +70,10 @@ extern bool verbose;
 #  pragma GCC diagnostic ignored "-Wold-style-cast"
 # endif
 #endif
-#ifdef __clang__
-# pragma clang diagnostic push "-Wdeprecated-declarations"
+#if (defined __clang__) && (defined HAVE_PRAGMA_CLANG_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS)
+# ifdef HAVE_PRAGMA_CLANG_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS
+#  pragma clang diagnostic push "-Wdeprecated-declarations"
+# endif
 #endif
 
 #include <cppunit/extensions/HelperMacros.h>
@@ -120,10 +122,11 @@ CPPUNIT_TEST_SUITE_REGISTRATION(NutIPCUnitTest);
 
 void NutIPCUnitTest::testExec() {
 #ifdef WIN32
-	/* FIXME: Some other program, maybe NUT's "message" handler, or "cmd -k" etc.?
-	 * And get Process working in the first place */
+	/* FIXME NUT_WIN32_INCOMPLETE:
+	 *  Some other program, maybe NUT's "message" handler, or "cmd -k" etc.?
+	 *  And get Process working in the first place */
 	std::cout << "NutIPCUnitTest::testExec(): skipped on this platform" << std::endl;
-#else
+#else	/* !WIN32 */
 	static const std::string bin = "/bin/sh";
 
 	nut::Process::Executor::Arguments args;
@@ -136,7 +139,7 @@ void NutIPCUnitTest::testExec() {
 	CPPUNIT_ASSERT(123 == child.wait());
 
 	CPPUNIT_ASSERT(0 == nut::Process::execute("test 'Hello world' = 'Hello world'"));
-#endif	/* WIN32 */
+#endif	/* !WIN32 */
 }
 
 
@@ -149,9 +152,10 @@ void NutIPCUnitTest::testSignalHandler(int signal) {
 
 void NutIPCUnitTest::testSignalSend() {
 #ifdef WIN32
-	/* FIXME: Needs implementation for signals via pipes */
+	/* FIXME NUT_WIN32_INCOMPLETE:
+	 *  Needs implementation for signals via pipes */
 	std::cout << "NutIPCUnitTest::testSignalSend(): skipped on this platform" << std::endl;
-#else
+#else	/* !WIN32 */
 	struct sigaction action;
 
 	pid_t my_pid = nut::Process::getPID();
@@ -208,7 +212,7 @@ void NutIPCUnitTest::testSignalSend() {
 	pid_file.removex();
 
 	signal_caught = 0;
-#endif	/* WIN32 */
+#endif	/* !WIN32 */
 }
 
 
@@ -229,9 +233,10 @@ class TestSignalHandler: public nut::Signal::Handler {
 // \todo Describe the point of this test.
 void NutIPCUnitTest::testSignalRecvQuick() {
 #ifdef WIN32
-	/* FIXME: Needs implementation for signals via pipes */
+	/* FIXME NUT_WIN32_INCOMPLETE:
+	 *  Needs implementation for signals via pipes */
 	std::cout << "NutIPCUnitTest::testSignalRecvQuick(): skipped on this platform" << std::endl;
-#else
+#else	/* !WIN32 */
 	// Create signal handler thread
 	nut::Signal::List signals;
 	caught_signals.clear();
@@ -309,14 +314,15 @@ void NutIPCUnitTest::testSignalRecvQuick() {
 	/* Check that received count matches sent count from code above. */
 	CPPUNIT_ASSERT(countUSER1 == 3);
 	CPPUNIT_ASSERT(countUSER2 == 2);
-#endif	/* WIN32 */
+#endif	/* !WIN32 */
 }
 
 void NutIPCUnitTest::testSignalRecvStaggered() {
 #ifdef WIN32
-	/* FIXME: Needs implementation for signals via pipes */
+	/* FIXME NUT_WIN32_INCOMPLETE:
+	 *  Needs implementation for signals via pipes */
 	std::cout << "NutIPCUnitTest::testSignalRecvStaggered(): skipped on this platform" << std::endl;
-#else
+#else	/* !WIN32 */
 	// Create signal handler thread
 	nut::Signal::List signals;
 	caught_signals.clear();
@@ -366,7 +372,7 @@ void NutIPCUnitTest::testSignalRecvStaggered() {
 	caught_signals.pop_front();
 
 	CPPUNIT_ASSERT(caught_signals.front() == nut::Signal::USER1);
-#endif	/* WIN32 */
+#endif	/* !WIN32 */
 }
 
 // Implement out of class declaration to avoid
@@ -376,7 +382,7 @@ void NutIPCUnitTest::testSignalRecvStaggered() {
 TestSignalHandler::~TestSignalHandler() {}
 NutIPCUnitTest::~NutIPCUnitTest() {}
 
-#ifdef __clang__
+#if (defined __clang__) && (defined HAVE_PRAGMA_CLANG_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS)
 # pragma clang diagnostic pop
 #endif
 #if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_EXIT_TIME_DESTRUCTORS || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_GLOBAL_CONSTRUCTORS || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_SUGGEST_OVERRIDE_BESIDEFUNC || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_SUGGEST_DESTRUCTOR_OVERRIDE_BESIDEFUNC || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_WEAK_VTABLES_BESIDEFUNC || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_DEPRECATED_DYNAMIC_EXCEPTION_SPEC_BESIDEFUNC || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_EXTRA_SEMI_BESIDEFUNC || defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_OLD_STYLE_CAST_BESIDEFUNC)

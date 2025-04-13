@@ -1,9 +1,13 @@
 /*
     nutconf.hpp - Nut configuration file manipulation API
 
-    Copyright (C)
-	2012	Emilien Kia <emilien.kia@gmail.com>
-	2024	Jim Klimov <jimklimov+nut@gmail.com>
+    Copyright (C) 2012 Eaton
+
+        Author: Emilien Kia <emilien.kia@gmail.com>
+
+    Copyright (C) 2024-2025 NUT Community
+
+        Author: Jim Klimov  <jimklimov+nut@gmail.com>
 
     This program is free software; you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -133,11 +137,28 @@ public:
 	}
 
 	bool operator==(const Type& val)const
+#if (defined __cplusplus) && (__cplusplus < 201100)
+		throw(std::invalid_argument)
+#endif
 	{
 		if(!set())
 			return false;
 		else
+		try {
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MAYBE_UNINITIALIZED)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+			// some compilers are concerned that Settable<Type>._value
+			// may be queried as un-initialized here (for equality)
+			// but we are supposed to rule that out with "if set()"...
 			return _value == val;
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MAYBE_UNINITIALIZED)
+#pragma GCC diagnostic pop
+#endif
+		} catch(...) {
+			throw std::invalid_argument(errMsg_ENOTSET());
+		}
 	}
 
 };
@@ -204,7 +225,9 @@ public:
 	Settable<bool> bool01;
 
 	/** Leave all contents un-set */
-	BoolInt() {}
+	BoolInt() {
+		clearWithBool01();
+	}
 
 	BoolInt(const bool val) {
 		*this = val;
@@ -249,14 +272,22 @@ public:
 
 	inline void clear()
 	{
+		i = 0;
+		b = false;
 		i.clear();
 		b.clear();
 	}
 
-	inline BoolInt& operator=(const BoolInt& other)
+	inline void clearWithBool01()
 	{
 		clear();
+		bool01 = false;
 		bool01.clear();
+	}
+
+	inline BoolInt& operator=(const BoolInt& other)
+	{
+		clearWithBool01();
 
 		if (other.b.set()) b = other.b;
 		if (other.i.set()) i = other.i;
@@ -269,8 +300,7 @@ public:
 
 	inline BoolInt& operator=(BoolInt&& other)
 	{
-		clear();
-		bool01.clear();
+		clearWithBool01();
 
 		if (other.b.set()) b = other.b;
 		if (other.i.set()) i = other.i;
@@ -404,10 +434,24 @@ public:
 			// false if at least one object has neither i nor b
 			// values "set()", or if their numeric values do not
 			// match up as 0 or 1 exactly vs. boolean values.
-			if (i.set() && other.b.set())
-				return ( (other.b && i == 1) || (!other.b && i == 0) );
-			if (b.set() && other.i.set())
-				return ( (b && other.i == 1) || (!b && other.i == 0) );
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MAYBE_UNINITIALIZED)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
+#endif
+			// some compilers are concerned that Settable<Type>._value
+			// may be queried as un-initialized here (for 0/1 equality)
+			// but we are supposed to rule that out with "if set()"...
+			try {
+				if (i.set() && other.b.set())
+					return ( (other.b && i == 1) || (!other.b && i == 0) );
+			} catch (...) {}
+			try {
+				if (b.set() && other.i.set())
+					return ( (b && other.i == 1) || (!b && other.i == 0) );
+			} catch (...) {}
+#if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MAYBE_UNINITIALIZED)
+#pragma GCC diagnostic pop
+#endif
 		}
 
 		return false;
@@ -810,24 +854,26 @@ protected:
 	 *  \param[in]   section  Section name
 	 *  \param[in]   entry    Entry name
 	 *  \param[out]  params   Configuration parameters
+	 *  \param[in]   caseSensitive  Use case-sensitive entry name matching? (default: true)
 	 *
 	 *  \retval true  if the entry was found
 	 *  \retval false otherwise
 	 */
-	bool get(const std::string & section, const std::string & entry, ConfigParamList & params) const;
+	bool get(const std::string & section, const std::string & entry, ConfigParamList & params, bool caseSensitive = true) const;
 
 	/**
 	 *  \brief  Global scope configuration parameters getter
 	 *
 	 *  \param[in]   entry    Entry name
 	 *  \param[out]  params   Configuration parameters
+	 *  \param[in]   caseSensitive  Use case-sensitive entry name matching? (default: true)
 	 *
 	 *  \retval true  if the entry was found
 	 *  \retval false otherwise
 	 */
-	inline bool get(const std::string & entry, ConfigParamList & params) const
+	inline bool get(const std::string & entry, ConfigParamList & params, bool caseSensitive = true) const
 	{
-		return get("", entry, params);
+		return get("", entry, params, caseSensitive);
 	}
 
 	/**
@@ -926,12 +972,34 @@ protected:
 	 *
 	 *  \param  section  Section name
 	 *  \param  entry    Entry name
+	 *  \param  caseSensitive  Use case-sensitive entry name matching? (default: true)
 	 *
 	 *  \return Configuration parameter as string
 	 */
 	std::string getStr(
 		const std::string & section,
-		const std::string & entry) const;
+		const std::string & entry,
+		bool                caseSensitive = true) const;
+
+	/**
+	 *  \brief  Configuration string getter
+	 *
+	 *  Empty string is returned if the section or entry doesn't exist.
+	 *
+	 *  \param  section  Section name
+	 *  \param  entry    Entry name (as C char array or string literal)
+	 *  \param  caseSensitive  Use case-sensitive entry name matching? (default: true)
+	 *
+	 *  \return Configuration parameter as string
+	 */
+	std::string getStr(
+		const std::string & section,
+		const char        * entry,
+		bool                caseSensitive = true) const
+	{
+		std::string sEntry{entry};
+		return getStr(section, sEntry, caseSensitive);
+	}
 
 	/**
 	 *  \brief  Global scope configuration string getter
@@ -939,12 +1007,15 @@ protected:
 	 *  Empty string is returned if the entry doesn't exist.
 	 *
 	 *  \param  entry  Entry name
+	 *  \param  caseSensitive  Use case-sensitive entry name matching? (default: true)
 	 *
 	 *  \return Configuration parameter as string
 	 */
-	inline std::string getStr(const std::string & entry) const
+	inline std::string getStr(
+		const std::string & entry,
+		bool                caseSensitive = true) const
 	{
-		return getStr("", entry);
+		return getStr("", entry, caseSensitive);
 	}
 
 	/**
@@ -1474,6 +1545,12 @@ public:
 		NOTIFY_NOTECO,
 		NOTIFY_ALARM,
 		NOTIFY_NOTALARM,
+		NOTIFY_OVER,
+		NOTIFY_NOTOVER,
+		NOTIFY_TRIM,
+		NOTIFY_NOTTRIM,
+		NOTIFY_BOOST,
+		NOTIFY_NOTBOOST,
 
 		NOTIFY_OTHER = 28,
 		NOTIFY_NOTOTHER,
@@ -1666,6 +1743,7 @@ public:
 
 	inline std::string getChroot()     const { return getStr("chroot"); }
 	inline std::string getDriverPath() const { return getStr("driverpath"); }
+	inline std::string getStatePath()  const { return getStr("statepath", false); }	// NOTE: accept it case-insensitively
 	inline std::string getGroup()      const { return getStr("group"); }
 	inline std::string getSynchronous() const { return getStr("synchronous"); }
 	inline std::string getUser()       const { return getStr("user"); }
@@ -1682,6 +1760,7 @@ public:
 
 	inline void setChroot(const std::string & path)     { setStr("chroot",     path); }
 	inline void setDriverPath(const std::string & path) { setStr("driverpath", path); }
+	inline void setStatePath(const std::string & path)  { setStr("statepath", path); }
 	inline void setGroup(const std::string & group)     { setStr("group",      group); }
 	inline void setSynchronous(const std::string & val) { setStr("synchronous", val); }
 	inline void setUser(const std::string & user)       { setStr("user",       user); }
