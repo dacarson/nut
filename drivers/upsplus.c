@@ -448,7 +448,6 @@ static void get_charge_level(void)
     dstate_setinfo("battery.charge", "%d", battery_charge_level);
     upsdebugx(2, "Battery Charge Level out of range, skipping");
   }
-}
 
 static void get_output_voltage(void)
 {
