@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3454 utf-8
+personal_ws-1.1 en 3546 utf-8
 AAC
 AAS
 ABI
@@ -80,6 +80,7 @@ Autobook
 Autoconfigure
 Avocent
 Axel
+Axpert
 Axxium
 BATGNn
 BATNn
@@ -92,6 +93,8 @@ BCD
 BCHARGE
 BCM
 BD
+BKnnnnM
+BKxxxM
 BMC
 BNT
 BOH
@@ -103,6 +106,8 @@ BTS
 BTV
 BUFRD
 BUZ
+BVKnnnnM
+BVKxxxM
 BXnnnnMI
 BYP
 BZ
@@ -152,6 +157,7 @@ CBI
 CCC
 CCCC
 CDC
+CDN
 CDS
 CELLPADDING
 CELLSPACING
@@ -190,6 +196,7 @@ CSN
 CSS
 CTB
 CUDA
+CUSPP
 CVE
 CXR
 CXX
@@ -229,9 +236,11 @@ CygWin
 Cygwin
 DATACABLE
 DATAPATH
+DBCF
 DCE
 DCF
 DCO
+DDA
 DDD
 DDDDD
 DDDDDD
@@ -311,6 +320,7 @@ Dsystemtap
 Dynamix
 Dynex
 EAGAIN
+EB
 EE
 EEPROM
 EFI
@@ -357,6 +367,7 @@ Emilien
 Energia
 EnergySaving
 Enphase's
+Epyc
 Erikson
 Eriksson
 Evgeny
@@ -364,7 +375,10 @@ Exar
 ExecCGI
 ExecStart
 ExecStartPre
+FAILOVER
+FBCA
 FD
+FDE
 FEMEA
 FFF
 FH
@@ -425,6 +439,7 @@ GPLv
 GPSER
 GRs
 GTK
+GTS
 GUESSTIMATION
 GUID
 GUIs
@@ -479,6 +494,7 @@ HOWTO
 HPE
 HPUX
 HREF
+HU
 HUPCL
 HUZKVEIkHnC
 HV
@@ -488,6 +504,7 @@ HWMON
 Hajduch
 Hanno
 Harnhammar
+Hasangarayev
 Havard
 Heavner
 Hessenflow
@@ -595,13 +612,16 @@ Korte
 Kralewski
 Kroll
 Krpec
+Kubanek
 Kubernetes
+Kuttnig
 Kx
 LASTXFER
 LCDRM
 LCDRT
 LCDRTXL
 LDADD
+LDAP
 LDFLAGS
 LDLC
 LDRIVER
@@ -845,6 +865,7 @@ OUTDIR
 OUTPUTV
 OUTVOLT
 OV
+OVERDURATION
 Oden
 OffTime
 Ohloh
@@ -941,6 +962,7 @@ Pavel
 Pawe
 PbAc
 Perriault
+Petr
 Petri
 Petter
 Pezzini
@@ -962,10 +984,12 @@ PowerAlert
 PowerCOM
 PowerCom
 PowerES
+PowerGuide
 PowerKinetics
 PowerMac
 PowerMan
 PowerManagerII
+PowerMaster
 PowerMust
 PowerNet
 PowerOff
@@ -985,6 +1009,7 @@ PowerWare
 Powerchute
 Powercool
 Powervar
+Powervar's
 Powerwell
 Prachi
 Prereqs
@@ -1018,6 +1043,7 @@ QLDL
 QMD
 QMF
 QMOD
+QOL
 QP
 QPAR
 QPD
@@ -1028,6 +1054,7 @@ QVFW
 QWS
 QinHeng
 Quette
+RBAC
 RBWARNTIME
 RDLCK
 RDNT
@@ -1057,6 +1084,7 @@ RRR
 RSA
 RSM
 RST
+RTC
 RTU
 RTXL
 RUPS
@@ -1314,6 +1342,8 @@ TopGuard
 Toth
 TrackingID
 TrackingResult
+Trevisan
+Treviño
 Tripp
 TrippLite
 Tru
@@ -1372,6 +1402,7 @@ UUUU
 UX
 Ubuntu
 Ulf
+Ulfat
 Uncomment
 Unices
 Unitek
@@ -1612,6 +1643,7 @@ avahi
 avr
 awd
 awk
+axpert
 b'some
 b'string
 bAlternateSetting
@@ -1732,8 +1764,10 @@ cgi
 cgipath
 cgroup
 cgroupsv
+changelog
 chargetime
 charset
+checkruntime
 checksum
 checksums
 chgrp
@@ -1786,8 +1820,11 @@ configurationProvider
 configureaz
 configureaza
 confpath
+conn
 const
 contrib
+cooldown
+coolofftime
 copyrightable
 coreutils
 cout
@@ -1845,9 +1882,11 @@ datadir
 datagrams
 datalink
 dataok
+datarootdir
 dataset
 datasets
 datasheet
+datasize
 datastale
 dblatex
 dcd
@@ -1856,6 +1895,7 @@ ddk
 ddl
 de
 deUNV
+deadtime
 debian
 debootstrap
 debouncing
@@ -1879,12 +1919,14 @@ desc
 deschis
 descr
 desde
+desertwitch
 designator
 dev
 devclient
 devctl
 devd
 devel
+devfs
 deviceGetClients
 devicename
 devscan
@@ -1896,6 +1938,7 @@ dir
 disassembly
 discardable
 disp
+disptesttime
 distcheck
 distclean
 distro
@@ -1910,6 +1953,7 @@ dnf
 dnl
 dnsmasq
 docbook
+docbuildmode
 docdir
 docinfo
 docs
@@ -2013,6 +2057,7 @@ faa
 fabula
 facto
 failmode
+failover
 fallthrough
 fasttrack
 fatalx
@@ -2054,6 +2099,7 @@ frob
 frontends
 fs
 fsd
+fsdmode
 fsr
 fstab
 ftdi
@@ -2129,6 +2175,7 @@ gzip
 hal
 hardcoded
 hasFeature
+hashx
 hb
 hcd
 hcl
@@ -2203,6 +2250,8 @@ ina
 includePath
 includedir
 inductor
+inet
+influenceable
 infos
 infoval
 inh
@@ -2213,6 +2262,7 @@ initializer
 initializers
 initinfo
 initscripts
+inittime
 initups
 inline
 inlined
@@ -2238,6 +2288,7 @@ interruptonly
 interruptsize
 intltool
 inverter
+inverters
 invmode
 io
 ioLogik
@@ -2274,6 +2325,7 @@ jdk
 jenkins
 jessie
 jimklimov
+jour
 journalctl
 jpeg
 jpg
@@ -2304,6 +2356,7 @@ labcd
 lan
 langid
 lasaine
+launchd
 lbrb
 ld
 ldd
@@ -2437,6 +2490,7 @@ mA
 mDNS
 mS
 macaddr
+macOS
 macosx
 mailo
 mailx
@@ -2451,8 +2505,10 @@ manpage
 manpages
 masterguard
 matcher
+maxconnfails
 maxd
 maxlength
+maxproc
 maxreport
 maxretry
 maxstartdelay
@@ -2496,7 +2552,10 @@ mips
 mirrorlist
 mis
 misconfigured
+mk
+mkdb
 mkdir
+mkstr
 mmZ
 mmap
 mn
@@ -2574,6 +2633,7 @@ newmge
 newvictronups
 nf
 ng
+nginx
 nhnl
 nhs
 nielchiano
@@ -2603,12 +2663,14 @@ nombattvolt
 noncommercially
 noout
 nooutstats
+noprimarytime
 norating
 noro
 noscanlangid
 nosnap
 nosuid
 notAfter
+nothave
 notifyflags
 notifyme
 notifymsg
@@ -2620,6 +2682,10 @@ nowarn
 np
 nspr
 nss
+ntopAI
+ntopSS
+ntopW
+nuf
 nuget
 num
 numOfBytesFromUPS
@@ -2659,6 +2725,7 @@ onbattery
 onbattwarn
 ondelay
 oneac
+oneshot
 online
 onlinedischarge
 ont
@@ -2666,6 +2733,7 @@ onwards
 ooce
 openSUSE
 opencollective
+openfiles
 openipmi
 openjdk
 openlog
@@ -2673,6 +2741,7 @@ openmp
 openpimi
 openssh
 openssl
+openwin
 oper
 optimizations
 optiups
@@ -2718,6 +2787,7 @@ pfy
 ph
 phoenixcontact
 phoenixtec
+photovoltaic
 picocom
 pid
 pidpath
@@ -2765,6 +2835,7 @@ powerpanel
 powershell
 powerup
 powervalue
+powervar
 powerware
 ppc
 pprint
@@ -2792,6 +2863,8 @@ proc
 productid
 prog
 progname
+progs
+proxied
 prtconf
 ps
 psu
@@ -2801,6 +2874,7 @@ pts
 ptv
 pty
 pulizzi
+pv
 pw
 pwd
 pwmib
@@ -2847,11 +2921,13 @@ reentrancy
 refactored
 refactoring
 refreservation
+refsect
 regex
 regtype
 relatime
 releasekeyring
 relicensing
+relogtime
 remoteip
 renderer
 renderers
@@ -2863,6 +2939,7 @@ reposurgeon
 repotec
 req
 resetter
+resizing
 resolv
 restoreconf
 resync
@@ -2889,6 +2966,7 @@ rootca
 rootcerts
 rootfs
 rootfs'es
+rootpidpath
 rpath
 rpc
 rpool
@@ -3009,7 +3087,9 @@ snr
 socat
 sockdebug
 socketname
+sockfn
 socomec
+soh
 solari
 solaris
 solcmn
@@ -3041,6 +3121,7 @@ sshd
 ssize
 ssl
 sstate
+stacksize
 stan
 startIP
 startdelay
@@ -3066,6 +3147,7 @@ strcpy
 strdup
 strerror
 strftime
+strictfiltering
 stringify
 strlen
 strncpy
@@ -3096,6 +3178,7 @@ subnet
 subnets
 subtree
 sudo
+sudoers
 suggestsrcdoc
 suid
 suppressions
@@ -3215,6 +3298,7 @@ ucd
 ucrt
 udev
 udevadm
+udq
 ufw
 ugen
 ui
@@ -3222,6 +3306,8 @@ uid
 uint
 ukUNV
 ul
+ulimit
+ulink
 un
 uname
 uncomment
@@ -3315,6 +3401,7 @@ useradd
 userid
 userland
 usermap
+usermod
 username
 usernames
 userspace
@@ -3345,6 +3432,7 @@ vbat
 vbatt
 vc
 vda
+ve
 vendorid
 ver
 verifySourceSig
@@ -3362,10 +3450,13 @@ virtinst
 virtualization
 virtualized
 vivo
+vla
 vo
 volsize
 voltronic
 vscode
+vsnprintf
+vsnprintfcat
 vt
 wDescriptorLength
 waitbeforereconnect
@@ -3392,6 +3483,7 @@ workspaceFolder
 workspaces
 writability
 writeinfo
+writepid
 writeups
 ws
 xAAAA

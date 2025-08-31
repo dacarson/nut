@@ -162,8 +162,9 @@ link:https://github.com/networkupstools/nut/wiki/Links-to-distribution-packaging
       link:http://doc.freenas.org/9.3/freenas_services.html#ups[FreeNAS 9.3 docs on UPS integration]
       and link:https://www.ixsystems.com/documentation/freenas/11.3-U5/services.html#ups[FreeNAS 11.3-U5 docs on UPS integration]
 
-- Mac OS X:
+- macOS 11+ and Mac OS X:
 
+    * link:https://formulae.brew.sh/formula/nut[Homebrew formula]
     * link:https://github.com/fink/fink-distributions/blob/master/10.9-libcxx/stable/main/finkinfo/net/nut.info[Fink recipe]
       and link:http://pdb.finkproject.org/pdb/package.php/nut[Fink package overview]
     * link:http://trac.macports.org/browser/trunk/dports/sysutils/nut/Portfile[MacPorts recipe]
@@ -180,6 +181,9 @@ link:https://github.com/networkupstools/nut/wiki/Links-to-distribution-packaging
       CI] -- but it may be difficult to locate specifically the master-branch builds.
       See link:https://github.com/networkupstools/nut/wiki/NUT-for-Windows[NUT
       for Windows wiki article] for these details, and more.
++
+The latest release's automated build archive is available here:
+      link:https://www.networkupstools.org/package/windows/NUT-for-Windows-x86_64-RELEASE-{revision}.7z[NUT-for-Windows-x86_64-RELEASE-{revision}.7z]
     * link:https://www.networkupstools.org/package/windows/NUT-Installer-2.6.5-6.msi[(OBSOLETE) Windows MSI installer 2.6.5-6]
 
 

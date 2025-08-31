@@ -150,7 +150,7 @@ static int scan_hwmon_ina219(const char *sysfs_hwmon_dir)
 	if (strcmp(device_path, "auto")) {
 		if ((ret = detect_ina219(device_path)) < 0) {
 			fatal_with_errno(EXIT_FAILURE,
-					"not a valid hwmon ina219 dir: '%s'\n", device_path);
+					"'port' does not specify a valid hwmon ina219 dir: '%s'", device_path);
 		}
 
 		snprintf(ina219_base_path, sizeof(ina219_base_path), "%s", device_path);
@@ -455,7 +455,7 @@ void upsdrv_updateinfo(void)
 	dstate_setinfo("battery.charge", "%u", charge);
 
 	if (charge <= battery_charge_low && current > 0)
-		dstate_setinfo("battery.runtime", "%d", 60); // 1 minute
+		dstate_setinfo("battery.runtime", "%d", 60);	/* 1 minute */
 
 	status_commit();
 	dstate_dataok();

@@ -50,13 +50,21 @@ dnl # Example:   NUT_SOURCE_GITREV='2.8.2.695.1-696+g0e00f0777'
 NUT_SOURCE_GITREV="`NUT_VERSION_QUERY=DESC50 "${srcdir}/tools/gitlog2version.sh" 2>/dev/null`"
 
 dnl A true/false (literally) response that can be used for prettier messages
-dnl emitted by NUT code.
-NUT_SOURCE_GITREV_IS_RELEASE="`NUT_VERSION_QUERY=IS_RELEASE "${srcdir}/tools/gitlog2version.sh" 2>/dev/null`"
-AS_IF([$NUT_SOURCE_GITREV_IS_RELEASE], [NUT_SOURCE_GITREV_DEVREL="release"], [NUT_SOURCE_GITREV_DEVREL="development iteration"])
+dnl emitted by NUT code, or make some "auto" configuration choices below.
+NUT_SOURCE_GITREV_IS_RELEASE="`NUT_VERSION_QUERY=IS_RELEASE "${srcdir}/tools/gitlog2version.sh" 2>/dev/null || echo false`"
+NUT_SOURCE_GITREV_IS_PRERELEASE="`NUT_VERSION_QUERY=IS_PRERELEASE "${srcdir}/tools/gitlog2version.sh" 2>/dev/null || echo false`"
+
+AS_IF([$NUT_SOURCE_GITREV_IS_RELEASE], [NUT_SOURCE_GITREV_DEVREL="release"], [
+    AS_IF([$NUT_SOURCE_GITREV_IS_PRERELEASE], [NUT_SOURCE_GITREV_DEVREL="pre-release"],
+        [NUT_SOURCE_GITREV_DEVREL="development iteration"])
+])
 
 dnl Semantic version of most-recent NUT release this code is derived from.
 dnl It may equal the NUT_SOURCE_GITREV and NUT_SOURCE_GITREV_NUMERIC, but
-dnl this situation is only expected if NUT_SOURCE_GITREV_IS_RELEASE==true.
+dnl this situation is only expected if NUT_SOURCE_GITREV_IS_RELEASE==true;
+dnl for a pre-release it may differ from even the base NUT_VERSION numbers
+dnl (e.g. a commit tagged as 2.8.3-rc5 can have its own NUT_VERSION based
+dnl on 2.8.2-something, but is assumed as a pre-release for 2.8.3 SEMVER).
 NUT_SOURCE_GITREV_SEMVER="`NUT_VERSION_QUERY=SEMVER "${srcdir}/tools/gitlog2version.sh" 2>/dev/null`"
 
 dnl Gitrev-based build identifier which can be used for e.g. PyPI uploads:
@@ -230,6 +238,7 @@ AM_PROG_CC_C_O
 AC_PROG_CPP
 AC_PROG_CXX
 AC_PROG_CXX_C_O
+AC_PATH_PROG([LDD], [ldd])
 
 CFLAGS_AFTER_ACPROG="${CFLAGS-}"
 CXXFLAGS_AFTER_ACPROG="${CXXFLAGS-}"
@@ -483,8 +492,24 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     eval conftemp=\"${conftemp}\"
     PREFIX_BINDIR="${conftemp}"
 
+    dnl Not-set CGI or DRV paths would be defaulted in due time,
+    dnl probably to bindir. Do not enforce any opinions here.
+    conftemp="${with_cgipath}"
+    eval conftemp=\"${conftemp}\"
+    eval conftemp=\"${conftemp}\"
+    PREFIX_CGIDIR="${conftemp}"
+    AS_CASE([${PREFIX_CGIDIR}], [yes|no], [PREFIX_CGIDIR=""])
+
+    conftemp="${with_drvpath}"
+    eval conftemp=\"${conftemp}\"
+    eval conftemp=\"${conftemp}\"
+    PREFIX_DRVDIR="${conftemp}"
+    AS_CASE([${PREFIX_DRVDIR}], [yes|no], [PREFIX_DRVDIR=""])
+
     DEPLOYED_SBINDIR="${PREFIX_SBINDIR}"
     DEPLOYED_BINDIR="${PREFIX_BINDIR}"
+    DEPLOYED_CGIDIR="${PREFIX_CGIDIR}"
+    DEPLOYED_DRVDIR="${PREFIX_DRVDIR}"
     dnl Note use of AC_PATH_PROG for specific pathname (not AC_CHECK_PROGS which picks filename variants)!
     dnl Note: "ordinary" users might not have "sbin" in their default PATH, so appending it:
     dnl Note: in some systems, the file in PATH is a shell
@@ -492,6 +517,10 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     AC_PATH_PROG([DEPLOYED_UPSD], [upsd], [], [${PREFIX_SBINDIR}:${PATH}:/sbin:/usr/sbin:/usr/local/sbin])
     dnl ...however "upsc" is a userland tool so should be there:
     AC_PATH_PROG([DEPLOYED_UPSC], [upsc], [], [${PREFIX_BINDIR}:${PATH}])
+    dnl Assume some driver that is commonly/always installed; check also Debian-ish packaged locations:
+    AC_PATH_PROG([DEPLOYED_DUMMYUPS], [dummy-ups], [], [${PREFIX_DRVDIR}:${PREFIX_BINDIR}:${PATH}:/usr/lib/nut:/lib/nut])
+    dnl The CGI client suite is very optional, may well be absent:
+    AC_PATH_PROG([DEPLOYED_UPSIMAGE], [upsimage.cgi], [], [${PREFIX_CGIDIR}:${PREFIX_BINDIR}:${PATH}:/usr/lib/cgi-bin/nut:/usr/libexec/cgi-bin/nut:/usr/libexec/nut:/usr/libexec/nut/cgi-bin:/usr/lib/nut:/usr/lib/nut/cgi-bin])
     AS_IF([test -x "${DEPLOYED_UPSD}"], [
         AX_REALPATH([$DEPLOYED_UPSD], [DEPLOYED_UPSD])
         DEPLOYED_SBINDIR="`dirname "${DEPLOYED_UPSD}"`"
@@ -499,6 +528,14 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     AS_IF([test -x "${DEPLOYED_UPSC}"], [
         AX_REALPATH([$DEPLOYED_UPSC], [DEPLOYED_UPSC])
         DEPLOYED_BINDIR="`dirname "${DEPLOYED_UPSC}"`"
+        ])
+    AS_IF([test -x "${DEPLOYED_DUMMYUPS}"], [
+        AX_REALPATH([$DEPLOYED_DUMMYUPS], [DEPLOYED_DUMMYUPS])
+        DEPLOYED_DRVDIR="`dirname "${DEPLOYED_DUMMYUPS}"`"
+        ])
+    AS_IF([test -x "${DEPLOYED_UPSIMAGE}"], [
+        AX_REALPATH([$DEPLOYED_UPSIMAGE], [DEPLOYED_UPSIMAGE])
+        DEPLOYED_CGIDIR="`dirname "${DEPLOYED_UPSIMAGE}"`"
         ])
 
     DEPLOYED_PREFIX=""
@@ -512,11 +549,16 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
 
     CONFIG_FLAGS_DEPLOYED=""
     NUT_VERSION_DEPLOYED=""
+    DEPLOYED_LIBDIR=""
     dnl TODO: Similar query can be done for BINDIR tools
     dnl and for libupsclient-config if deployed locally
+    dnl First check upsc, dummy-ups or nut-scanner (TBD)
+    dnl to detect not only version and CONFIG_OPTS but
+    dnl also the shared library location the best we can.
     for DEPLOYED_TOOL in \
-        "${DEPLOYED_UPSD}" \
         "${DEPLOYED_UPSC}" \
+        "${DEPLOYED_DUMMYUPS}" \
+        "${DEPLOYED_UPSD}" \
     ; do
         AS_IF([test x"${DEPLOYED_TOOL}" = x], [continue])
         AS_IF([test -x "${DEPLOYED_TOOL}"], [], [continue])
@@ -534,6 +576,18 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
         && test x"${NUT_VERSION_DEPLOYED}" != x \
         || NUT_VERSION_DEPLOYED=""
 
+        dnl FIXME: Find some more portable solution? Use a platform-dependent
+        dnl  "case" or various toolkits?
+        dnl  * Probably no need to fuss for Windows builds, as they would
+        dnl    anyway use the DLL near EXE after installation.
+        AS_IF([test -x "${LDD}" 2>/dev/null], [
+            for TOKEN in `$LDD "${DEPLOYED_TOOL}" 2>&1 | grep libupsclient` ; do
+                case "${TOKEN}" in
+                    /*/libupsclient*) DEPLOYED_LIBDIR="`dirname "$TOKEN"`" ;;
+                esac
+            done
+        ])
+
         AS_IF([test x"${CONFIG_FLAGS_DEPLOYED}${NUT_VERSION_DEPLOYED}" = x], [], [break])
     done
 
@@ -544,25 +598,110 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     ])
 
     dnl Account for custom paths if known/found:
+    AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+        [*--prefix=*], [
+            for F in ${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS} ; do
+                case "$F" in
+                    "--prefix="*) prefix="`echo "$F" | ( IFS='=' read K V ; echo "$V" )`" ;;
+                esac
+            done
+        ]
+    )
+
     AS_IF([test x"${DEPLOYED_PREFIX}" != x && test x"${DEPLOYED_PREFIX}" != x"${prefix}"],
         AC_MSG_WARN([Deployed NUT installation uses a PREFIX different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_PREFIX}' vs. '${prefix}'])
         [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
             [*--prefix=*], [],
-            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --prefix='${DEPLOYED_PREFIX}'"])
+            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --prefix='${DEPLOYED_PREFIX}'"
+             dnl Help re-evaluate it from verbatim defaults in later
+             dnl deployed path determinations e.g. for data(root)dir:
+             prefix="${DEPLOYED_PREFIX}"
+        ])
     ])
+    dnl FIXME? Re-evaluate cgipath and/or drvpath if they are defined with a
+    dnl verbatim '${prefix}' inside, and no hits found in earlier attempts?
 
     AS_IF([test x"${DEPLOYED_SBINDIR}" != x && test x"${DEPLOYED_SBINDIR}" != x"${PREFIX_SBINDIR}"],
-        AC_MSG_WARN([Deployed NUT installation uses a SBINDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_SBINDIR}' vs. '${sbindir}'])
+        AC_MSG_WARN([Deployed NUT installation uses a SBINDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_SBINDIR}' vs. '${PREFIX_SBINDIR}' ('${sbindir}')])
         [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
             [*--sbindir=*], [],
             [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --sbindir='${DEPLOYED_SBINDIR}'"])
     ])
 
     AS_IF([test x"${DEPLOYED_BINDIR}" != x && test x"${DEPLOYED_BINDIR}" != x"${PREFIX_BINDIR}"],
-        AC_MSG_WARN([Deployed NUT installation uses a BINDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_BINDIR}' vs. '${bindir}'])
+        AC_MSG_WARN([Deployed NUT installation uses a BINDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_BINDIR}' vs. '${PREFIX_BINDIR}' ('${bindir}')])
         [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
             [*--bindir=*], [],
             [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --bindir='${DEPLOYED_BINDIR}'"])
+    ])
+
+    AS_IF([test x"${DEPLOYED_CGIDIR}" != x && test x"${DEPLOYED_CGIDIR}" != x"${PREFIX_CGIDIR}"],
+        AC_MSG_WARN([Deployed NUT installation uses a CGIDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_CGIDIR}' vs. '${PREFIX_CGIDIR}' ('${with_cgipath}')])
+        [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+            [*--with-cgipath=*], [],
+            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --with-cgipath='${DEPLOYED_CGIDIR}'"])
+    ])
+
+    AS_IF([test x"${DEPLOYED_DRVDIR}" != x && test x"${DEPLOYED_DRVDIR}" != x"${PREFIX_DRVDIR}"],
+        AC_MSG_WARN([Deployed NUT installation uses a DRVDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_DRVDIR}' vs. '${PREFIX_DRVDIR}' ('${with_drvpath}')])
+        [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+            [*--with-drvpath=*], [],
+            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --with-drvpath='${DEPLOYED_DRVDIR}'"])
+    ])
+
+
+    AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+        [*--datarootdir=*], [
+            for F in ${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS} ; do
+                case "$F" in
+                    "--datarootdir="*) datarootdir="`echo "$F" | ( IFS='=' read K V ; echo "$V" )`" ;;
+                esac
+            done
+        ]
+    )
+
+    conftemp="${datarootdir}"
+    eval conftemp=\"${conftemp}\"
+    eval conftemp=\"${conftemp}\"
+    PREFIX_DATAROOTDIR="${conftemp}"
+    dnl The dataroot dir (system-wide) here is used to search for datadir candidate info
+
+    AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+        [*--datadir=*], [
+            for F in ${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS} ; do
+                case "$F" in
+                    "--datadir="*) datadir="`echo "$F" | ( IFS='=' read K V ; echo "$V" )`" ;;
+                esac
+            done
+        ]
+    )
+
+    conftemp="${datadir}"
+    eval conftemp=\"${conftemp}\"
+    eval conftemp=\"${conftemp}\"
+    PREFIX_DATADIR="${conftemp}"
+    DATADIR="${PREFIX_DATADIR}"
+    DEPLOYED_DATADIR=""
+
+    AS_IF([test -e "${PREFIX_DATAROOTDIR}/nut/cmdvartab" || test -e "${PREFIX_DATAROOTDIR}/nut/driver.list"],
+        [DEPLOYED_DATADIR="${PREFIX_DATAROOTDIR}/nut"],
+        [AS_IF([test -e "${PREFIX_DATAROOTDIR}/cmdvartab" || test -e "${PREFIX_DATAROOTDIR}/driver.list"],
+            [DEPLOYED_DATADIR="${PREFIX_DATAROOTDIR}"],
+            [dnl FIXME: Be careful on WIN32 and its "find" vs. that in MINGW?
+             DEPLOYED_DATADIR="`find "${PREFIX_DATAROOTDIR}" -name cmdvartab | head -1 | sed 's,/@<:@^/@:>@*$,,'`" || DEPLOYED_DATADIR=""
+             AS_IF([test -z "${DEPLOYED_DATADIR}"], [DEPLOYED_DATADIR="`find "${PREFIX_DATAROOTDIR}" -name driver.list | head -1 | sed 's,/@<:@^/@:>@*$,,'`" || DEPLOYED_DATADIR=""])
+            ]
+        )]
+    )
+    AS_IF([test -z "${DEPLOYED_DATADIR}" && test -d "${PREFIX_DATAROOTDIR}/nut"], [DEPLOYED_DATADIR="${PREFIX_DATAROOTDIR}/nut"])
+
+    AS_IF([test x"${DEPLOYED_DATADIR}" != x && test x"${DEPLOYED_DATADIR}" != x"${PREFIX_DATADIR}"],
+        AC_MSG_WARN([Deployed NUT installation uses a DATADIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_DATADIR}' vs. '${PREFIX_DATADIR}' ('${datadir}')])
+        [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+            [*--datadir=*], [],
+            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --datadir='${DEPLOYED_DATADIR}'"
+             DATADIR="${DEPLOYED_DATADIR}"
+            ])
     ])
 
     AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
@@ -579,7 +718,14 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
         dnl NOTE: Single-quotes are correct for autotools default,
         dnl expanded at runtime (see conftemp tricks below)
 
-        AC_MSG_CHECKING([for in-place replacement default sysconfdir (better than '${sysconfdir}')])
+        conftemp="${sysconfdir}"
+        eval conftemp=\"${conftemp}\"
+        eval conftemp=\"${conftemp}\"
+        dnl Evaluated here for the message; CONFPATH will be re-evaluated
+        dnl below, after we decide on the sysconfdir value we really like.
+        PREFIX_SYSCONFDIR="${conftemp}"
+
+        AC_MSG_CHECKING([for in-place replacement default sysconfdir, better than '${PREFIX_SYSCONFDIR}' ('${sysconfdir}')])
         DEPLOYED_SYSCONFDIR=""
 
         dnl TODO: Any more reasonable defaults? Pile them on here :)
@@ -633,7 +779,17 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     conftemp="${libdir}"
     eval conftemp=\"${conftemp}\"
     eval conftemp=\"${conftemp}\"
-    LIBDIR="${conftemp}"
+    PREFIX_LIBDIR="${conftemp}"
+    LIBDIR="${PREFIX_LIBDIR}"
+
+    AS_IF([test x"${DEPLOYED_LIBDIR}" != x && test x"${DEPLOYED_LIBDIR}" != x"${PREFIX_LIBDIR}"],
+        AC_MSG_WARN([Deployed NUT installation uses a LIBDIR different from one specified (wins) or derived (loses) for this build: '${DEPLOYED_LIBDIR}' vs. '${PREFIX_LIBDIR}' ('${libdir}')])
+        [AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
+            [*--libdir=*], [],
+            [CONFIG_FLAGS_DEPLOYED="${CONFIG_FLAGS_DEPLOYED} --libdir='${DEPLOYED_LIBDIR}'"
+             LIBDIR="${DEPLOYED_LIBDIR}"
+            ])
+    ])
 
     AS_CASE(["${CONFIG_FLAGS_DEPLOYED} ${CONFIG_FLAGS}"],
         [*--libexecdir=*], [
@@ -760,7 +916,7 @@ AS_IF([test x"$nut_enable_inplace_runtime" = xyes -a x"${NUT_VERSION_DEPLOYED-}"
     ])
 
     AS_IF([test x"${CONFIG_FLAGS_DEPLOYED}" != x], [
-        AC_MSG_NOTICE([Detected CONFIG_FLAGS of an already deployed NUT installation, using them for --inplace-runtime configuration (restarting script)])
+        AC_MSG_NOTICE([Detected CONFIG_FLAGS for an already deployed NUT installation, using them for --inplace-runtime configuration (restarting script)])
         dnl For multiply-specified flags with conflicting values, last mention wins:
         AC_MSG_NOTICE([exec "$0" $CONFIG_FLAGS_DEPLOYED $CONFIG_FLAGS --disable-inplace-runtime])
         AS_IF([test x"${NUT_VERSION_DEPLOYED}" != x], [
@@ -1259,7 +1415,13 @@ AC_CACHE_CHECK([for strdup(s)],
             [[int res = 0;
 char *t = "Test";
 char *s = strdup(t);
-if (!s || !(s[0]=='T'&&s[1]=='e'&&s[2]=='s'&&s[3]=='t'&&s[4]=='\0') || s == t) res = 1;
+if (!s || !(
+        s[0]=='T' &&
+        s[1]=='e' &&
+        s[2]=='s' &&
+        s[3]=='t' &&
+        s[4]=='\0'
+    ) || s == t) res = 1;
 if (s) free (s);
 if (res != 0) return res
 /* autoconf adds ";return 0;" */
@@ -1270,6 +1432,54 @@ AS_IF([test x"${ac_cv_func_strdup}" = xyes],
     [AC_DEFINE([HAVE_STRDUP], 1, [defined if standard library has, and C standard allows, the strdup(s) method])],
     [AC_MSG_WARN([Required C library routine strdup not found; try adding -D_POSIX_C_SOURCE=200112L])]
     )
+
+AC_CACHE_CHECK([for va_copy(dest,src)],
+  [ac_cv_have_va_copy],
+  [
+    AX_RUN_OR_LINK_IFELSE(
+      [AC_LANG_PROGRAM(
+        [[#include <stdarg.h>
+          void check_va_copy(const char *fmt, ...) {
+            va_list ap1, ap2;
+            va_start(ap1, fmt);
+            va_copy(ap2, ap1);
+            va_end(ap1);
+            va_end(ap2);
+          }]],
+        [[check_va_copy("%s", "test");]])],
+      [ac_cv_have_va_copy=yes],
+      [ac_cv_have_va_copy=no])
+  ])
+
+AS_IF([test x"$ac_cv_have_va_copy" = xyes],
+  [AC_DEFINE([HAVE_VA_COPY], [1], [defined if va_copy(dest,src) is available])])
+
+AC_CACHE_CHECK([for __va_copy(dest,src)],
+  [ac_cv_have___va_copy],
+  [
+    AX_RUN_OR_LINK_IFELSE(
+      [AC_LANG_PROGRAM(
+        [[#include <stdarg.h>
+          void check___va_copy(const char *fmt, ...) {
+            va_list ap1, ap2;
+            va_start(ap1, fmt);
+            __va_copy(ap2, ap1);
+            va_end(ap1);
+            va_end(ap2);
+          }]],
+        [[check___va_copy("%s", "test");]])],
+      [ac_cv_have___va_copy=yes],
+      [ac_cv_have___va_copy=no])
+  ])
+
+AS_IF([test x"$ac_cv_have___va_copy" = xyes],
+  [AC_DEFINE([HAVE___VA_COPY], [1], [defined if __va_copy(dest,src) is available])])
+
+AS_IF([test x"$ac_cv_have_va_copy" = xyes -o x"$ac_cv_have___va_copy" = xyes],
+  [AC_DEFINE([HAVE_VA_COPY_VARIANT], [1], [defined if va_copy or __va_copy is available])])
+
+AS_IF([test x"$ac_cv_have_va_copy" != xyes -a x"$ac_cv_have___va_copy" != xyes],
+  [AC_MSG_WARN([No va_copy(dest,src) or __va_copy(dest,src) available - may truncate oversized logs])])
 
 AC_CHECK_HEADER([sys/select.h],
     [AC_DEFINE([HAVE_SYS_SELECT_H], [1],
@@ -1972,31 +2182,57 @@ AC_ARG_WITH(drivers,
 				MACOSX_DRIVERLIST MODBUS_DRIVERLIST LINUX_I2C_DRIVERLIST
 				POWERMAN_DRIVERLIST IPMI_DRIVERLIST GPIO_DRIVERLIST"
 
-			get_drvlist() (
+			dnl Gets ONE Makefile assignment value
+			get_drivers_makefile_value() (
 				dnl Note escaped brackets - "against" m4 parser
 				m4_version_prereq(2.62,
 					[LB="@<:@"; RB="@:>@"],
 					[LB="[["; RB="]]"]
 				)
+				dnl ###DEBUG### echo "RECURSIVE SEARCH FOR: '$1'" >&2
 				SPACE="`printf "$LB"' \t'"$RB"`"
 				SPACES="${SPACE}*"
 				sed -e "s/${SPACES}""$LB"'+'"$RB"'*='"${SPACES}/=/" \
 				    -e "s/^${SPACES}//" < "$srcdir/drivers/Makefile.am" \
-				| {
+				| (
 					C=false; V=false
 					while read LINE ; do
 						case "$LINE" in
 							*'\') C=true; if $V ; then echo "$LINE" ; fi ;;
-							*) C=false; V=false ;;
+							*) if $C ; then exit 0; fi ; C=false; V=false ;;
 						esac
 						case "$LINE" in
 							"$1"=*)
-								echo "$LINE" | sed -e 's,^'"$LB"'^='"$RB"'*=,,' -e 's,\$,,'
+								echo "$LINE" | sed -e 's,^'"$LB"'^='"$RB"'*=,,'
 								V=$C
 								;;
 						esac
 					done
-				} | tr '\n' ' ' | sed -e "s,${SPACE}${SPACES}, ," -e "s,${SPACES}\$,,"
+					echo ""
+				) | tr '\n' ' ' | sed -e 's,\$(EXEEXT),,g' \
+				| tr ' ' '\n' | while read TOKEN ; do
+					case x"${TOKEN}" in
+						x)	;;
+						'x$('*')') get_drivers_makefile_value "`echo "${TOKEN}" | sed -e 's,^\$(,,' -e 's,)$,,'`" ;;
+						'x${'*'}') get_drivers_makefile_value "`echo "${TOKEN}" | sed -e 's,^\${,,' -e 's,}$,,'`" ;;
+						*)	echo "${TOKEN} " ;;
+					esac
+				done dnl ###DEBUG### | tee -a /dev/stderr
+			)
+
+			get_drvlist() (
+				m4_version_prereq(2.62,
+					[LB="@<:@"; RB="@:>@"],
+					[LB="[["; RB="]]"]
+				)
+				dnl ###DEBUG### echo "SEARCH FOR: '$1'" >&2
+				SPACE="`printf "$LB"' \t'"$RB"`"
+				SPACES="${SPACE}*"
+
+				dnl Let it recurse, and only then we collect the
+				dnl result into one string with reduced spaces:
+				get_drivers_makefile_value "$1" \
+				| tr '\n' ' ' | sed -e "s,${SPACE}${SPACES}, ,g" -e "s,${SPACES}\$,,"
 			)
 
 			for DRVLIST_NAME in $DRVLIST_NAMES; do
@@ -2247,14 +2483,60 @@ dnl a second-class citizen (if both are set, the old option name wins).
 dnl Also note that the legacy default was "man=yes" due to requirements
 dnl of the "make distcheck", but it was reduced to "man=auto" so that
 dnl the usual builds can pass by default on systems without asciidoc.
-NUT_ARG_WITH([docs], [build and install documentation (alias to --with-doc)], [man=auto])
+nut_with_docs_default="man=auto"
+AS_IF([($NUT_SOURCE_GITREV_IS_RELEASE || $NUT_SOURCE_GITREV_IS_PRERELEASE)],
+    [AC_MSG_NOTICE([This is a (pre-)release build, setting default --with-doc='auto' (not just '${nut_with_docs_default}')])
+     nut_with_docs_default="auto"])
+
+NUT_ARG_WITH([docs], [build and install documentation (alias to --with-doc)], [${nut_with_docs_default}])
 NUT_ARG_WITH([doc], [build and install documentation (see docs/configure.txt for many variants of the option)], [${nut_with_docs}])
 
+NUT_ARG_ENABLE([docs-man-for-progs-built-only], [build and install man pages (if enabled) only for built programs (yes, default) or all known pages (no)], [yes])
+NUT_ARG_ENABLE([docs-changelog], [(re-)generate ChangeLog* files - and do so whenever git info changes? (default: auto; yes, no, "adoc,html,pdf"...)], [auto])
+
+NUT_ARG_WITH([docs-changelog-start], [Starting point when generating ChangeLog* files (default: auto; otherwise Git commit ID)], [auto])
+NUT_ARG_WITH([docs-changelog-end], [Ending point when generating ChangeLog* files (default: HEAD; otherwise Git commit ID)], [HEAD])
+
+dnl Different OS distributions have different layouts of man page section
+dnl numbers. The one we treat as default seems to be most wide-spread, in
+dnl Linux and FreeBSD. For others, there are other defaults (see `man man`
+dnl on your platform to port defaults here), and builders can override with
+dnl options further below.
+DEFAULT_MAN_SECTION_API="3"
+DEFAULT_MAN_SECTION_CFG="5"
+DEFAULT_MAN_SECTION_CMD_SYS="8"
+DEFAULT_MAN_SECTION_CMD_USR="1"
+DEFAULT_MAN_SECTION_MISC="7"
+
+dnl Should we use "man1" or "man1m"?
+DEFAULT_MAN_DIR_AS_BASE="yes"
+
+case "${target_os}" in
+    solaris*|sunos*|SunOS*|illumos*)
+        DEFAULT_MAN_SECTION_CMD_SYS="1m"
+        DEFAULT_MAN_DIR_AS_BASE="no"
+        ;;
+esac
+
+dnl Report the defaults we would use in args
+AC_MSG_NOTICE([Platform ${target_os} default man page section for library APIs: '${DEFAULT_MAN_SECTION_API}'])
+AC_MSG_NOTICE([Platform ${target_os} default man page section for configuration files: '${DEFAULT_MAN_SECTION_CFG}'])
+AC_MSG_NOTICE([Platform ${target_os} default man page section for system management commands: '${DEFAULT_MAN_SECTION_CMD_SYS}'])
+AC_MSG_NOTICE([Platform ${target_os} default man page section for user commands: '${DEFAULT_MAN_SECTION_CMD_USR}'])
+AC_MSG_NOTICE([Platform ${target_os} default man page section for overviews, conventions, and miscellaneous: '${DEFAULT_MAN_SECTION_MISC}'])
+
 dnl NOTE: Sections may be strings, not pure numbers, on some platforms:
-NUT_ARG_WITH([docs-man-section-api], [man page section for library APIs], [3])
-NUT_ARG_WITH([docs-man-section-cfg], [man page section for configuration files], [5])
-NUT_ARG_WITH([docs-man-section-cmd-sys], [man page section for system management commands], [8])
-NUT_ARG_WITH([docs-man-section-cmd-usr], [man page section for user commands], [1])
+NUT_ARG_WITH([docs-man-section-api], [man page section for library APIs], [${DEFAULT_MAN_SECTION_API}])
+NUT_ARG_WITH([docs-man-section-cfg], [man page section for configuration files], [${DEFAULT_MAN_SECTION_CFG}])
+NUT_ARG_WITH([docs-man-section-cmd-sys], [man page section for system management commands], [${DEFAULT_MAN_SECTION_CMD_SYS}])
+NUT_ARG_WITH([docs-man-section-cmd-usr], [man page section for user commands], [${DEFAULT_MAN_SECTION_CMD_USR}])
+NUT_ARG_WITH([docs-man-section-misc], [man page section for overviews, conventions, and miscellaneous], [${DEFAULT_MAN_SECTION_MISC}])
+
+NUT_ARG_WITH([docs-man-dir-as-base], [are platform man directories named by base number (yes) or full section name (no)], [${DEFAULT_MAN_DIR_AS_BASE}])
+
+NUT_ARG_WITH([docs-man-linkmanext-template], [asciidoc template for "linkmanext" tags (distro-dependent)], [auto])
+NUT_ARG_WITH([docs-man-linkmanext2-template], [asciidoc template for "linkmanext2" tags (distro-dependent)], [auto])
+NUT_ARG_ENABLE([docs-man-linkmanext-section-rewrite], [Should external man page sections be adjusted in URL references?], [auto])
 
 dnl NOTE: Until X-Mas 2021, the default was "legacy" (now "medium")
 NUT_ARG_ENABLE([warnings],
@@ -2831,11 +3113,12 @@ dnl Python interpreter versions to care about below, so we only test for
 dnl their existence once (in NUT_CHECK*PYTHON* m4 macros).
 
 dnl ${nut_with_nut_monitor}: TODO: arg values to request Python 2 gtk2,
-dnl Python 3 qt5, or both
+dnl Python 3 Qt5, Python 3 Qt6 or all
 AC_MSG_CHECKING([if we want install NUT-Monitor desktop application])
 AC_MSG_RESULT([${nut_with_nut_monitor}])
 nut_with_nut_monitor_py2gtk2=""
 nut_with_nut_monitor_py3qt5=""
+nut_with_nut_monitor_py3qt6=""
 nut_with_nut_monitor_desktop=""
 dnl TODO: Add a way to define this path? will have app/ maybe module/ inside...
 nut_with_nut_monitor_dir="${datarootdir}/nut-monitor"
@@ -2867,7 +3150,8 @@ if test x"${nut_with_nut_monitor}" != xno ; then
     dnl HACK NOTE: Here we redirect outputs to "&5" which is autoconf stream
     dnl for "config.log" details since... forever? Still, hardcoded numbers...
     PYTHON2_TEST_MODULES="re,glob,codecs,gtk,gtk.glade,gobject,ConfigParser"
-    PYTHON3_TEST_MODULES="re,glob,codecs,PyQt5.uic,configparser"
+    PYTHON3_TEST_MODULES_QT5="re,glob,codecs,PyQt5.uic,configparser"
+    PYTHON3_TEST_MODULES_QT6="re,glob,codecs,PyQt6.uic,configparser"
     if test -n "${PYTHON2_VERSION_INFO_REPORT}" ; then
         AC_MSG_CHECKING([if we have Python2 prerequisites for NUT-Monitor desktop application])
         if ${PYTHON2} -c "import ${PYTHON2_TEST_MODULES}" 1>&5 2>&5 \
@@ -2923,38 +3207,68 @@ if test x"${nut_with_nut_monitor}" != xno ; then
     fi
 
     if test -n "${PYTHON3_VERSION_INFO_REPORT}" ; then
-        AC_MSG_CHECKING([if we have Python3 prerequisites for NUT-Monitor desktop application])
-        if ${PYTHON3} -c "import ${PYTHON3_TEST_MODULES}" 1>&5 2>&5 \
+        AC_MSG_CHECKING([if we have Python3 Qt5 prerequisites for NUT-Monitor desktop application])
+        if ${PYTHON3} -c "import ${PYTHON3_TEST_MODULES_QT5}" 1>&5 2>&5 \
         ; then
             nut_with_nut_monitor_py3qt5="yes"
             AC_MSG_RESULT([yes])
         else
             AC_MSG_RESULT([no])
             if test -n "${PYTHON_FAILED_TEST_DETAILS}" ; then
-                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 modules: '${PYTHON3_TEST_MODULES}'"
+                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 Qt5 modules: '${PYTHON3_TEST_MODULES_QT5}'"
             else
-                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 modules: '${PYTHON3_TEST_MODULES}'"
+                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 Qt5 modules: '${PYTHON3_TEST_MODULES_QT5}'"
+            fi
+        fi
+    fi
+
+    if test -n "${PYTHON3_VERSION_INFO_REPORT}" ; then
+        AC_MSG_CHECKING([if we have Python3 Qt6 prerequisites for NUT-Monitor desktop application])
+        if ${PYTHON3} -c "import ${PYTHON3_TEST_MODULES_QT6}" 1>&5 2>&5 \
+        ; then
+            nut_with_nut_monitor_py3qt6="yes"
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            if test -n "${PYTHON_FAILED_TEST_DETAILS}" ; then
+                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 Qt6 modules: '${PYTHON3_TEST_MODULES_QT6}'"
+            else
+                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 Qt6 modules: '${PYTHON3_TEST_MODULES_QT6}'"
             fi
         fi
     fi
 
     dnl Fall back to default interpreter
-    if test -z "${nut_with_nut_monitor_py2gtk2}${nut_with_nut_monitor_py3qt5}" \
+    if test -z "${nut_with_nut_monitor_py2gtk2}${nut_with_nut_monitor_py3qt5}${nut_with_nut_monitor_py3qt6}" \
     && test -n "${PYTHON_VERSION_INFO_REPORT}" \
     && test x"${PYTHON_VERSION_INFO_REPORT}" != x"${PYTHON3_VERSION_INFO_REPORT}" \
     && test x"${PYTHON_VERSION_INFO_REPORT}" != x"${PYTHON2_VERSION_INFO_REPORT}" \
     ; then
-        AC_MSG_CHECKING([if we have Python3 prerequisites for NUT-Monitor desktop application in default Python])
-        if ${PYTHON} -c "import ${PYTHON3_TEST_MODULES}" 1>&5 2>&5 \
+        AC_MSG_CHECKING([if we have Python3 Qt5 prerequisites for NUT-Monitor desktop application in default Python])
+        if ${PYTHON} -c "import ${PYTHON3_TEST_MODULES_QT5}" 1>&5 2>&5 \
         ; then
             nut_with_nut_monitor_py3qt5="yes"
             AC_MSG_RESULT([yes])
         else
             AC_MSG_RESULT([no])
             if test -n "${PYTHON_FAILED_TEST_DETAILS}" ; then
-                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 modules in default Python: '${PYTHON3_TEST_MODULES}'"
+                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 Qt5 modules in default Python: '${PYTHON3_TEST_MODULES_QT5}'"
             else
-                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 modules in default Python: '${PYTHON3_TEST_MODULES}'"
+                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 Qt5 modules in default Python: '${PYTHON3_TEST_MODULES_QT5}'"
+            fi
+        fi
+
+        AC_MSG_CHECKING([if we have Python3 Qt6 prerequisites for NUT-Monitor desktop application in default Python])
+        if ${PYTHON} -c "import ${PYTHON3_TEST_MODULES_QT6}" 1>&5 2>&5 \
+        ; then
+            nut_with_nut_monitor_py3qt6="yes"
+            AC_MSG_RESULT([yes])
+        else
+            AC_MSG_RESULT([no])
+            if test -n "${PYTHON_FAILED_TEST_DETAILS}" ; then
+                PYTHON_FAILED_TEST_DETAILS="${PYTHON_FAILED_TEST_DETAILS} and some or all of these Python3 Qt6 modules in default Python: '${PYTHON3_TEST_MODULES_QT6}'"
+            else
+                PYTHON_FAILED_TEST_DETAILS="Missing some or all of these Python3 Qt6 modules in default Python: '${PYTHON3_TEST_MODULES_QT6}'"
             fi
         fi
 
@@ -3017,9 +3331,10 @@ if test x"${nut_with_nut_monitor}" != xno ; then
         AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) nut_with_nut_monitor-3: ${nut_with_nut_monitor}])
         AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) nut_with_nut_monitor_py2gtk2: ${nut_with_nut_monitor_py2gtk2}])
         AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) nut_with_nut_monitor_py3qt5: ${nut_with_nut_monitor_py3qt5}])
+        AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) nut_with_nut_monitor_py3qt6: ${nut_with_nut_monitor_py3qt6}])
     ])
     dnl Can we satisfy any NUT-Monitor installation request?
-    if test -n "${nut_with_nut_monitor_py2gtk2}${nut_with_nut_monitor_py3qt5}" ; then
+    if test -n "${nut_with_nut_monitor_py2gtk2}${nut_with_nut_monitor_py3qt5}${nut_with_nut_monitor_py3qt6}" ; then
         case "${nut_with_nut_monitor}" in
             "auto") nut_with_nut_monitor="yes" ;;
         esac
@@ -3158,6 +3473,7 @@ if test "${nut_with_nut_monitor}" = force ; then
     nut_with_nut_monitor=yes
     nut_with_nut_monitor_py2gtk2=yes
     nut_with_nut_monitor_py3qt5=yes
+    nut_with_nut_monitor_py3qt6=yes
 fi
 
 if test "${nut_with_pynut}" = force ; then
@@ -3176,9 +3492,12 @@ NUT_REPORT_PROGRAM([install PyNUT binding module], [${nut_with_pynut}], [],
 					[WITH_PYNUT], [Define to enable PyNUT module installation])
 
 dnl One or both of these may be installed:
-AM_CONDITIONAL(WITH_NUT_MONITOR, test "${nut_with_nut_monitor}" = "yes" && test "${nut_with_nut_monitor_py2gtk2}" = "yes" -o "${nut_with_nut_monitor_py3qt5}" = "yes")
+AM_CONDITIONAL(WITH_NUT_MONITOR, test "${nut_with_nut_monitor}" = "yes" && test "${nut_with_nut_monitor_py2gtk2}" = "yes" -o "${nut_with_nut_monitor_py3qt5}" = "yes" -o "${nut_with_nut_monitor_py3qt6}" = "yes")
 AM_CONDITIONAL(WITH_NUT_MONITOR_PY2GTK2, test "${nut_with_nut_monitor_py2gtk2}" = "yes")
 AM_CONDITIONAL(WITH_NUT_MONITOR_PY3QT5, test "${nut_with_nut_monitor_py3qt5}" = "yes")
+AM_CONDITIONAL(WITH_NUT_MONITOR_PY3QT6, test "${nut_with_nut_monitor_py3qt6}" = "yes")
+AM_CONDITIONAL(WITH_NUT_MONITOR_PY3QT5_OR_QT6, test "${nut_with_nut_monitor_py3qt5}" = "yes" -o "${nut_with_nut_monitor_py3qt6}" = "yes")
+
 dnl Install PyNUT as a globally usable module, or just as app internals?
 AM_CONDITIONAL(WITH_PYNUT_PY,  test "${nut_with_pynut_py}" = "yes"  -a "${nut_with_pynut}" = yes)
 AM_CONDITIONAL(WITH_PYNUT_PY2, test "${nut_with_pynut_py2}" = "yes" -a "${nut_with_pynut}" = yes)
@@ -3188,6 +3507,7 @@ AM_CONDITIONAL(WITH_PYNUT_APP, test "${nut_with_pynut}" = "app")
 AC_SUBST([nut_with_nut_monitor_dir], [${nut_with_nut_monitor_dir}])
 AC_SUBST([nut_with_nut_monitor_py2gtk2], [${nut_with_nut_monitor_py2gtk2}])
 AC_SUBST([nut_with_nut_monitor_py3qt5], [${nut_with_nut_monitor_py3qt5}])
+AC_SUBST([nut_with_nut_monitor_py3qt6], [${nut_with_nut_monitor_py3qt6}])
 AC_SUBST([nut_with_nut_monitor_desktop], [${nut_with_nut_monitor_desktop}])
 AC_SUBST([nut_with_nut_monitor], [${nut_with_nut_monitor}])
 AC_SUBST([nut_with_pynut], [${nut_with_pynut}])
@@ -3276,6 +3596,8 @@ AM_CONDITIONAL(WITH_CHECK_NIT, test "${nut_enable_check_NIT}" = "yes")
 
 dnl ----------------------------------------------------------------------
 dnl checks related to --enable-spellcheck
+dnl NOTE: If the tools are present, you can "make spellcheck" explicitly;
+dnl  this setting is about trying or not to run it as part of "make check".
 
 NUT_CHECK_ASPELL
 NUT_ARG_ENABLE([spellcheck], [Run spellcheck among default checks], [auto])
@@ -3297,7 +3619,8 @@ case "${nut_enable_spellcheck}" in
 esac
 AC_MSG_RESULT([${WITH_SPELLCHECK}])
 
-AM_CONDITIONAL(WITH_SPELLCHECK, test "${WITH_SPELLCHECK}" = "yes")
+NUT_REPORT_FEATURE([requested to spell-check the documentation], [${WITH_SPELLCHECK}], [],
+					[WITH_SPELLCHECK], [Define to enable documentation spell checking as part of default checks], [-])
 
 dnl ----------------------------------------------------------------------
 dnl checks related to --with-doc
@@ -3307,10 +3630,8 @@ dnl is set to 'no', we may still want to build some doc targets manually
 dnl (so enable the Makefile recipes for those targets if tools are available)
 NUT_CHECK_ASCIIDOC
 
-NUT_REPORT_FEATURE([requested to build and install documentation], [${nut_with_doc}], [],
-					[WITH_ASCIIDOC], [Define to enable Asciidoc support])
-
 DOC_INSTALL_DISTED_MANS=no
+DOC_INSTALL_SELECTED_MANS=""
 KNOWN_UNABLE_MANS=no
 
 case "${nut_with_doc}" in
@@ -3340,6 +3661,9 @@ dnl If user passed --with-doc='' they they want nothing, right?
 		;;
 esac
 
+NUT_REPORT_FEATURE([requested to build and install documentation], ['${nut_with_doc}' => '${nut_doc_build_list}'], [],
+					[WITH_ASCIIDOC], [Define to enable Asciidoc support], [-])
+
 if test -z "${abs_srcdir}" ; then
 	case "${srcdir}" in
 		/*) abs_srcdir="${srcdir}";;
@@ -3349,6 +3673,24 @@ if test -z "${abs_srcdir}" ; then
 fi
 DOCTESTDIR="$(mktemp -d configure-test.docbuild.$$.XXXXXXX)" && \
 DOCTESTDIR="$(cd "$DOCTESTDIR" && pwd)"
+
+dnl NOTE: We perform some of these checks/infos also if docs=(man=)skip
+dnl  so we know in later reports if disted files are still an option
+dnl  should we want to not just skip them
+have_disted_doc_man=no
+want_disted_doc_man=no
+if test -s "${abs_srcdir}"/docs/man/snmp-ups.8 ; then
+	dnl Test that groff files exist (building from distributed tarball, not git repo)
+	if test x"PLACEHOLDER" = x"`cat "${abs_srcdir}"/docs/man/snmp-ups.8`" ; then
+		dnl REALLY should not happen in real builds,
+		dnl but may be in distcheck-driven sub-builds
+		dnl where the external build agreed to use
+		dnl fake man pages (e.g. for CI recipe checks)
+		have_disted_doc_man=yes-placeholder
+	else
+		have_disted_doc_man=yes
+	fi
+fi
 
 dnl Note: Do not cover ${nut_doc_build_list} in braces or quotes here,
 dnl to ensure that it is processed as several space-separated tokens
@@ -3365,12 +3707,14 @@ for nut_doc_build_target in $nut_doc_build_list; do
 		nut_doc_build_target_flag="yes"
 		;;
 	esac
+
 	case "${nut_doc_build_target_flag}" in
 	yes|no|auto|skip|dist-auto) ;;
 	"") nut_doc_build_target_flag="yes" ;;
 	*)	rm -rf "${DOCTESTDIR}"
 		AC_MSG_ERROR([Invalid documentation format option: ${nut_doc_build_target}]) ;;
 	esac
+
 	AC_MSG_CHECKING([desire and ability to build ${nut_doc_build_target_base} documentation])
 	AC_MSG_RESULT([${nut_doc_build_target_flag}])
 
@@ -3400,7 +3744,7 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 			AC_MSG_RESULT(no)
 			DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
 			if test "${nut_doc_build_target_flag}" = "yes" ; then
-				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested; will reflect on this below])
 			else
 				DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
 			fi
@@ -3423,7 +3767,7 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 			AC_MSG_RESULT(no)
 			DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
 			if test "${nut_doc_build_target_flag}" = "yes" ; then
-				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested; will reflect on this below])
 			else
 				DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
 			fi
@@ -3449,7 +3793,7 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 			AC_MSG_RESULT(no)
 			DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
 			if test "${nut_doc_build_target_flag}" = "yes" ; then
-				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+				AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested; will reflect on this below])
 			else
 				DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
 			fi
@@ -3460,33 +3804,22 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 		dnl Experimental support for --with-doc=man=dist-auto to prefer pre-disted docs if available, below
 		AC_MSG_CHECKING([if we can build ${nut_doc_build_target_base}])
 		can_build_doc_man=no
-		have_disted_doc_man=no
-		want_disted_doc_man=no
-		if test -s "${abs_srcdir}"/docs/man/snmp-ups.8 ; then
-			dnl Test that groff files exist (building from distributed tarball, not git repo)
-			if test x"PLACEHOLDER" = x"`cat "${abs_srcdir}"/docs/man/snmp-ups.8`" ; then
-				dnl REALLY should not happen in real builds,
-				dnl but may be in distcheck-driven sub-builds
-				dnl where the external build agreed to use
-				dnl fake man pages
-				have_disted_doc_man=yes-placeholder
-			else
-				have_disted_doc_man=yes
-			fi
-		fi
-		if test x"${nut_doc_build_target}" = x"man=dist-auto" || test "${nut_doc_build_target_flag}" = "dist-auto"; then
+		if test x"${nut_doc_build_target}" = x"man=dist-auto" || test x"${nut_doc_build_target_flag}" = x"dist-auto"; then
 			want_disted_doc_man=yes
 		fi
 		if test "${nut_have_asciidoc}" = yes ; then
 			( cd "$DOCTESTDIR" && ${A2X} --format manpage --destination-dir=. --xsltproc-opts="--nonet" "${abs_srcdir}"/docs/man/snmp-ups.txt && test -s snmp-ups.8 ) && can_build_doc_man=yes
 			rm -f "${DOCTESTDIR}"/snmp-ups.8
 		fi
+		can_install_doc_man=no
 		if test "${want_disted_doc_man}" = yes && ( test "${have_disted_doc_man}" = yes || test "${have_disted_doc_man}" = yes-placeholder ) ; then
 			AC_MSG_NOTICE([Requested, and can, install pre-built distributed copies of ${nut_doc_build_target_base} documentation])
 			DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
 			DOC_INSTALL_DISTED_MANS="yes"
-			dnl Avoid rebuilding existing build products due to their timestamp dependencies:
+			dnl Avoid rebuilding existing build products due to their timestamp dependencies;
+			dnl ignore "touch" errors due to e.g. read-only sources (distcheck, ISO image, etc.):
 			touch -r "${abs_srcdir}"/docs/man/Makefile.am "${abs_srcdir}"/docs/man/*.{1,2,3,4,5,6,7,8,9}* "${abs_srcdir}"/docs/man/*.{txt,xml,html,pdf} || true
+			can_install_doc_man=yes
 		else
 			if test "${can_build_doc_man}" = yes ; then
 				AC_MSG_RESULT(yes)
@@ -3495,24 +3828,44 @@ dnl not fail if we have no tools to generate it (so add to SKIP list).
 					dnl is satisfied that directory "man" exists:
 					[DOC_BUILD_LIST="${DOC_BUILD_LIST} man-man"],
 					[DOC_BUILD_LIST="${DOC_BUILD_LIST} ${nut_doc_build_target_base}"])
+				can_install_doc_man=yes
 			else
 				AC_MSG_RESULT(no)
 				DOC_CANNOTBUILD_LIST="${DOC_CANNOTBUILD_LIST} ${nut_doc_build_target_base}"
 				KNOWN_UNABLE_MANS=yes
 				if test "${nut_doc_build_target_flag}" = "yes" ; then
-					AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested])
+					AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation which you requested; will reflect on this below])
 				else
 					DOC_SKIPBUILD_LIST="${DOC_SKIPBUILD_LIST} ${nut_doc_build_target_base}"
-					if test "${nut_doc_build_target_flag}" = "auto" || test "${nut_doc_build_target_flag}" = "dist-auto" ; then
+					case "${nut_doc_build_target_flag}" in
+					no|skip) ;;
+					auto|dist-auto)
 						if test "${have_disted_doc_man}" = yes || test "${have_disted_doc_man}" = yes-placeholder ; then
 							AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, but can install pre-built distributed copies])
 							DOC_INSTALL_DISTED_MANS="yes"
+							can_install_doc_man=yes
 						else
-							AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, and unable to install pre-built distributed copies because they are absent])
+							AC_MSG_WARN([Unable to build ${nut_doc_build_target_base} documentation, and unable to install pre-built distributed copies because they are absent; will reflect on this below])
 						fi
-					fi  # Other variants include "no", "skip"...
+						;;
+					*)
+						AC_MSG_ERROR([Unexpected flag value '${nut_doc_build_target_flag}' for ${nut_doc_build_target_base} documentation])
+						;;
+					esac
 				fi
 			fi
+		fi
+
+		if test "${can_install_doc_man}" = yes ; then
+			case "${nut_enable_docs_man_for_progs_built_only}" in
+			yes)
+				dnl Legacy default for auto builds: build/deliver only mans for built progs:
+				DOC_INSTALL_SELECTED_MANS="mans-progs-built"
+				;;
+			no)
+				DOC_INSTALL_SELECTED_MANS="mans-progs-all"
+				;;
+			esac
 		fi
 		;;
 
@@ -3524,28 +3877,32 @@ done
 rm -rf "${DOCTESTDIR}"
 
 AS_IF([test x"${nut_enable_configure_debug}" = xyes], [
-    AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_BUILD_LIST:       '${DOC_BUILD_LIST}'])
-    AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_CANNOTBUILD_LIST: '${DOC_CANNOTBUILD_LIST}'])
-    AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_SKIPBUILD_LIST:   '${DOC_SKIPBUILD_LIST}'])
+	AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_BUILD_LIST:            '${DOC_BUILD_LIST}'])
+	AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_CANNOTBUILD_LIST:      '${DOC_CANNOTBUILD_LIST}'])
+	AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_SKIPBUILD_LIST:        '${DOC_SKIPBUILD_LIST}'])
+	AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_INSTALL_DISTED_MANS:   '${DOC_INSTALL_DISTED_MANS}'])
+	AC_MSG_NOTICE([(CONFIGURE-DEVEL-DEBUG) DOC_INSTALL_SELECTED_MANS: '${DOC_INSTALL_SELECTED_MANS}'])
 ])
 
 case "${nut_with_doc}" in
 auto)
 	if test -n "${DOC_BUILD_LIST}"; then
+		dnl # We can build at least one format...
 		nut_with_doc="yes"
 	else
+		dnl # We can not build any formats...
 		nut_with_doc="no"
 	fi
 	;;
 no)
 	;;
-*)
+*)  dnl # yes, all, skip...
 	if test -n "${DOC_CANNOTBUILD_LIST}"; then
 		DOC_CANNOTBUILD_LIST_LINES="`echo "${DOC_CANNOTBUILD_LIST}" | tr ' ' '\n' | grep -vE '^$'`"
-		for DOCTYPE in ${DOC_BUILD_LIST} ; do
-			if echo "${DOC_CANNOTBUILD_LIST_LINES}" | grep -E "^${DOCTYPE}(|=yes)\$" ; then
+		for DOCTYPE in ${nut_doc_build_list} ; do
+			if echo "${DOC_CANNOTBUILD_LIST_LINES}" | grep -E "^${DOCTYPE}(=yes)?\$" >/dev/null 2>/dev/null ; then
 				AC_MSG_ERROR([Unable to build${DOC_CANNOTBUILD_LIST} documentation (check for 'no' results above)])
-			else if echo "${DOC_CANNOTBUILD_LIST_LINES}" | grep -E "^${DOCTYPE}=(skip|auto|dist-auto)\$" ; then
+			else if echo "${DOC_CANNOTBUILD_LIST_LINES}" | grep -E "^${DOCTYPE}=(skip|auto|dist-auto)\$" >/dev/null 2>/dev/null ; then
 				AC_MSG_NOTICE([Unable to build${DOC_CANNOTBUILD_LIST} documentation (check for 'no' results above), skipping])
 				fi
 			fi
@@ -3566,8 +3923,8 @@ esac
 
 AM_CONDITIONAL(WITH_PDF_NONASCII_TITLES, [test x"$can_build_doc_pdf_nonascii_titles" = xyes])
 
-NUT_REPORT_FEATURE([would build specific documentation format(s)], [${nut_with_doc}], [${DOC_BUILD_LIST}],
-					[WITH_DOCS], [Define to enable overall documentation generation])
+NUT_REPORT_FEATURE([would build specific documentation format(s)], [${nut_with_doc}], [${DOC_BUILD_LIST} ${DOC_INSTALL_SELECTED_MANS}],
+					[WITH_DOCS], [Define to enable overall documentation generation], [-])
 
 # To cater for less portable make's, precalculate the target list
 # for "make check" in "docs/" here...
@@ -3599,7 +3956,13 @@ AM_CONDITIONAL(WITH_MANS, test "${WITH_MANS}" = "yes")
 AM_CONDITIONAL(SKIP_MANS, test "${SKIP_MANS}" = "yes")
 AM_CONDITIONAL(KNOWN_UNABLE_MANS, test "${KNOWN_UNABLE_MANS}" = "yes")
 AM_CONDITIONAL(DOC_INSTALL_DISTED_MANS, test "${DOC_INSTALL_DISTED_MANS}" = "yes")
+dnl TOTHINK: Expand more flexibly? Currently we either (build and) install
+dnl  all known man pages, or only those for programs we currently build,
+dnl  so a boolean-ish toggle suffices.
+dnl AM_CONDITIONAL(DOC_INSTALL_SELECTED_MANS_PROGS_ALL, test x"${DOC_INSTALL_SELECTED_MANS}" = x"mans-progs-all")
+AM_CONDITIONAL(DOC_INSTALL_SELECTED_MANS_PROGS_BUILT, test x"${DOC_INSTALL_SELECTED_MANS}" = x"mans-progs-built")
 dnl Reporting have_disted_doc_man not DOC_INSTALL_DISTED_MANS because the former has more values
+AS_IF([test x"${have_disted_doc_man}" = x], [have_disted_doc_man="did not check"])
 NUT_REPORT([can install pre-built documentation (release/dist tarball)], ["${have_disted_doc_man}"])
 
 WITH_HTML_SINGLE=no
@@ -3635,36 +3998,271 @@ fi
 AM_CONDITIONAL(WITH_PDFS, test "${WITH_PDFS}" = "yes")
 AM_CONDITIONAL(SKIP_PDFS, test "${SKIP_PDFS}" = "yes")
 
+dnl # NUT ChangeLog* files can consume a lot of build time,
+dnl # so we want to let developers skip (re-)building them
+dnl # if they enable docs and then iterate their code base.
+WITH_CHANGELOG_TEXT=no
+WITH_CHANGELOG_ADOC=no
+WITH_CHANGELOG_HTML_SINGLE=no
+WITH_CHANGELOG_HTML_CHUNKED=no
+WITH_CHANGELOG_PDF=no
+
+dnl # Correlate "auto" with some measure of development iterations (quick) vs. release/tarball build (full). Can maintainer-mode be it?
+AS_IF([($NUT_SOURCE_GITREV_IS_RELEASE || $NUT_SOURCE_GITREV_IS_PRERELEASE) && test "${nut_enable_docs_changelog}" = auto],
+	[
+	 dnl # CI systems struggle to build a release commit, for now do not require this bit:
+	 dnl # https://github.com/networkupstools/nut/issues/3053
+	 AC_MSG_NOTICE([This is a (pre-)release build and original --enable-docs-changelog=${nut_enable_docs_changelog} -- consider setting to "yes"])
+	 dnl # AC_MSG_NOTICE([Enabling WITH_CHANGELOG_*=yes because this is a (pre-)release build and original --enable-docs-changelog=${nut_enable_docs_changelog}])
+	 dnl # nut_enable_docs_changelog=yes
+	]
+)
+
+case "${nut_enable_docs_changelog}" in
+	no|skip)	AC_MSG_NOTICE([Requested to not enable WITH_CHANGELOG_*])
+		;;
+	yes)
+		AS_IF([test "${nut_with_doc}" != yes], [AC_MSG_ERROR([Can not enable WITH_CHANGELOG_* due to build settings or environment])])
+		WITH_CHANGELOG_TEXT=yes
+		WITH_CHANGELOG_ADOC=yes
+		AS_IF([test "${WITH_HTML_SINGLE}" = "yes" -a "${SKIP_HTML_SINGLE}" = no],
+			[WITH_CHANGELOG_HTML_SINGLE=yes],
+			[AC_MSG_ERROR([Can not enable WITH_CHANGELOG_HTML_SINGLE due to build settings or environment])])
+		AS_IF([test "${WITH_HTML_CHUNKED}" = "yes" -a "${SKIP_HTML_CHUNKED}" = no],
+			[WITH_CHANGELOG_HTML_CHUNKED=yes],
+			[AC_MSG_ERROR([Can not enable WITH_CHANGELOG_HTML_CHUNKED due to build settings or environment])])
+		AS_IF([test "${WITH_PDFS}" = "yes" -a "${SKIP_PDFS}" = no],
+			[WITH_CHANGELOG_PDF=yes],
+			[AC_MSG_ERROR([Can not enable WITH_CHANGELOG_PDF due to build settings or environment])])
+		;;
+	auto|yes=auto|"")
+		AS_IF([test "${nut_with_doc}" = yes], [
+			WITH_CHANGELOG_TEXT=yes
+			WITH_CHANGELOG_ADOC=yes
+			AS_IF([test "${WITH_HTML_SINGLE}" = "yes" -a "${SKIP_HTML_SINGLE}" = no],
+				[WITH_CHANGELOG_HTML_SINGLE=yes],
+				[WITH_CHANGELOG_HTML_SINGLE=no
+				 AC_MSG_WARN([Can not enable WITH_CHANGELOG_HTML_SINGLE due to build settings or environment])
+				])
+			AS_IF([test "${WITH_HTML_CHUNKED}" = "yes" -a "${SKIP_HTML_CHUNKED}" = no],
+				[WITH_CHANGELOG_HTML_CHUNKED=yes],
+				[WITH_CHANGELOG_HTML_CHUNKED=no
+				 AC_MSG_WARN([Can not enable WITH_CHANGELOG_HTML_CHUNKED due to build settings or environment])
+				])
+			AS_IF([test "${WITH_PDFS}" = "yes" -a "${SKIP_PDFS}" = no],
+				[WITH_CHANGELOG_PDF=yes],
+				[WITH_CHANGELOG_PDF=no
+				 AC_MSG_WARN([Can not enable WITH_CHANGELOG_PDF due to build settings or environment])
+				])
+		], [
+			AC_MSG_WARN([Can not enable WITH_CHANGELOG_* due to build settings or environment])
+		])
+		;;
+	*)
+		AS_IF([test "${nut_with_doc}" = yes], [
+
+			dnl # Check each complex format desire independently:
+			case "${nut_enable_docs_changelog}" in
+			html-single=no*|*,html-single=no*|html-single=skip*|*,html-single=skip*) ;;
+			html-single*|*,html-single*)
+			AS_IF([test "${WITH_HTML_SINGLE}" = "yes" -a "${SKIP_HTML_SINGLE}" = no],
+				[WITH_CHANGELOG_HTML_SINGLE=yes],
+				[WITH_CHANGELOG_HTML_SINGLE=no
+				 case "${nut_enable_docs_changelog}" in
+				    *html-single=auto*)	AC_MSG_WARN([Can not enable WITH_CHANGELOG_HTML_SINGLE due to build settings or environment]) ;;
+				    *)	AC_MSG_ERROR([Can not enable WITH_CHANGELOG_HTML_SINGLE due to build settings or environment]) ;;
+				 esac
+				])
+			;; esac
+
+			case "${nut_enable_docs_changelog}" in
+			html-chunked=no*|*,html-chunked=no*|html-chunked=skip*|*,html-chunked=skip*) ;;
+			html-chunked*|*,html-chunked*)
+			AS_IF([test "${WITH_HTML_CHUNKED}" = "yes" -a "${SKIP_HTML_CHUNKED}" = no],
+				[WITH_CHANGELOG_HTML_CHUNKED=yes],
+				[WITH_CHANGELOG_HTML_CHUNKED=no
+				 case "${nut_enable_docs_changelog}" in
+				    *html-chunked=auto*)	AC_MSG_WARN([Can not enable WITH_CHANGELOG_HTML_CHUNKED due to build settings or environment]) ;;
+				    *)	AC_MSG_ERROR([Can not enable WITH_CHANGELOG_HTML_CHUNKED due to build settings or environment]) ;;
+				 esac
+				])
+			;; esac
+
+			case "${nut_enable_docs_changelog}" in
+			pdf=no*|*,pdf=no*|pdf=skip*|*,pdf=skip*) ;;
+			pdf*|*,pdf*)
+			AS_IF([test "${WITH_PDFS}" = "yes" -a "${SKIP_PDFS}" = no],
+				[WITH_CHANGELOG_PDF=yes],
+				[WITH_CHANGELOG_PDF=no
+				 case "${nut_enable_docs_changelog}" in
+				    *pdf=auto*)	AC_MSG_WARN([Can not enable WITH_CHANGELOG_PDF due to build settings or environment]) ;;
+				    *)	AC_MSG_ERROR([Can not enable WITH_CHANGELOG_PDF due to build settings or environment]) ;;
+				 esac
+				])
+			;; esac
+
+			case "${nut_enable_docs_changelog}" in
+			adoc=no*|*,adoc=no*)
+				AS_IF([test "${WITH_HTML_SINGLE}${WITH_CHANGELOG_HTML_CHUNKED}${WITH_CHANGELOG_PDF}" != "nonono"],
+					[AC_MSG_ERROR([Can not disable WITH_CHANGELOG_ADOC when HTML and/or PDF build is required])])
+				;;
+			adoc=yes*|*,adoc=yes*|adoc|adoc,*|*,adoc|*,adoc,*)	dnl Require enabled
+				WITH_CHANGELOG_ADOC=yes
+				;;
+			adoc=skip*|*,adoc=skip*|adoc=auto*|*,adoc=auto*|*)
+				AS_IF([test "${WITH_HTML_SINGLE}${WITH_CHANGELOG_HTML_CHUNKED}${WITH_CHANGELOG_PDF}" = "nonono"],
+					[WITH_CHANGELOG_ADOC=no],
+					[case "${nut_enable_docs_changelog}" in
+					 *adoc=skip*)
+						AC_MSG_WARN([Can not disable WITH_CHANGELOG_ADOC when HTML and/or PDF build is required, so enabling it])
+						;;
+					 esac
+					 WITH_CHANGELOG_ADOC=yes
+					])
+				;;
+			esac
+
+			WITH_CHANGELOG_TEXT=yes
+			case "${nut_enable_docs_changelog}" in
+			text=no|*,text=no)
+				AS_IF([test "${WITH_CHANGELOG_ADOC}${WITH_HTML_SINGLE}${WITH_CHANGELOG_HTML_CHUNKED}${WITH_CHANGELOG_PDF}" != "nononono"],
+					[AC_MSG_ERROR([Can not disable WITH_CHANGELOG_TEXT when ADOC, HTML and/or PDF build is required])])
+				WITH_CHANGELOG_TEXT=no
+				;;
+			text=skip|*,text=skip)
+				AS_IF([test "${WITH_CHANGELOG_ADOC}${WITH_HTML_SINGLE}${WITH_CHANGELOG_HTML_CHUNKED}${WITH_CHANGELOG_PDF}" = "nononono"],
+					[WITH_CHANGELOG_TEXT=no]
+					[AC_MSG_WARN([Can not disable WITH_CHANGELOG_TEXT when ADOC, HTML and/or PDF build is required, so enabling it])])
+				;;
+			esac
+		], [
+			AC_MSG_WARN([Can not enable WITH_CHANGELOG_* due to build settings or environment])
+		])
+		;;
+esac
+
+AM_CONDITIONAL(WITH_CHANGELOG_TEXT, test "${WITH_CHANGELOG_TEXT}" = "yes")
+AM_CONDITIONAL(WITH_CHANGELOG_ADOC, test "${WITH_CHANGELOG_ADOC}" = "yes")
+AM_CONDITIONAL(WITH_CHANGELOG_HTML_SINGLE, test "${WITH_CHANGELOG_HTML_SINGLE}" = "yes")
+AM_CONDITIONAL(WITH_CHANGELOG_HTML_CHUNKED, test "${WITH_CHANGELOG_HTML_CHUNKED}" = "yes")
+AM_CONDITIONAL(WITH_CHANGELOG_PDF, test "${WITH_CHANGELOG_PDF}" = "yes")
+
+case "${nut_with_docs_changelog_start}" in
+	yes|no|skip|"")
+		AC_MSG_WARN([Option value --with-docs-changelog-start='${nut_with_docs_changelog_start}' is not supported, switching to 'auto'])
+		nut_with_docs_changelog_start=auto
+		;;
+esac
+
+case "${nut_with_docs_changelog_start}" in
+	auto)
+		AS_IF([$NUT_SOURCE_GITREV_IS_RELEASE || $NUT_SOURCE_GITREV_IS_PRERELEASE || test x"${NUT_SOURCE_GITREV_NUMERIC}" = x],
+			[dnl # NUT v2.6.0 is the oldest release with asciidoc rendered into PDF
+			 GITLOG_START_POINT=v2.6.0
+			],
+			[dnl # Try to cut off from preceding release tag (as known in this git workspace index)
+			 GITLOG_START_POINT=v"`echo "${NUT_SOURCE_GITREV_NUMERIC}" | sed -e 's/^\(@<:@0-9@:>@*\.@<:@0-9@:>@*\.@<:@0-9@:>@*\)@<:@^0-9@:>@*.*$/\1/'`" \
+			 && test x"${GITLOG_START_POINT}" != xv \
+			 || GITLOG_START_POINT="master"
+			])
+		;;
+	*) dnl # Else assume this is a git hash/tag/branch...
+		GITLOG_START_POINT="${nut_with_docs_changelog_start}"
+		;;
+esac
+
+case "${nut_with_docs_changelog_end}" in
+	yes|no|skip|""|auto)	GITLOG_END_POINT=HEAD ;;
+	*)	GITLOG_END_POINT="${nut_with_docs_changelog_end}" ;;
+esac
+
+NUT_REPORT([would generate ChangeLog* file formats], [text:${WITH_CHANGELOG_TEXT} adoc:${WITH_CHANGELOG_ADOC} html-single:${WITH_CHANGELOG_HTML_SINGLE} html-chunked:${WITH_CHANGELOG_HTML_CHUNKED} pdf:${WITH_CHANGELOG_PDF} starting from '${GITLOG_START_POINT}' to '${GITLOG_END_POINT}'])
+
 dnl NOTE: Sections may be strings, not pure numbers, on some platforms:
 MAN_SECTION_API="${nut_with_docs_man_section_api}"
 MAN_SECTION_CFG="${nut_with_docs_man_section_cfg}"
 MAN_SECTION_CMD_SYS="${nut_with_docs_man_section_cmd_sys}"
 MAN_SECTION_CMD_USR="${nut_with_docs_man_section_cmd_usr}"
+MAN_SECTION_MISC="${nut_with_docs_man_section_misc}"
 
 MAN_SECTION_API_BASE="`echo "${MAN_SECTION_API}" | sed 's/^\(@<:@0-9@:>@*\)@<:@^0-9@:>@.*$/\1/'`"
 MAN_SECTION_CFG_BASE="`echo "${MAN_SECTION_CFG}" | sed 's/^\(@<:@0-9@:>@*\)@<:@^0-9@:>@.*$/\1/'`"
 MAN_SECTION_CMD_SYS_BASE="`echo "${MAN_SECTION_CMD_SYS}" | sed 's/^\(@<:@0-9@:>@*\)@<:@^0-9@:>@.*$/\1/'`"
 MAN_SECTION_CMD_USR_BASE="`echo "${MAN_SECTION_CMD_USR}" | sed 's/^\(@<:@0-9@:>@*\)@<:@^0-9@:>@.*$/\1/'`"
+MAN_SECTION_MISC_BASE="`echo "${MAN_SECTION_MISC}" | sed 's/^\(@<:@0-9@:>@*\)@<:@^0-9@:>@.*$/\1/'`"
 
+dnl Full man page section IDs (e.g. '1m', '8')
 AC_DEFINE_UNQUOTED([MAN_SECTION_API], ["${MAN_SECTION_API}"], [man page section for library APIs])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CFG], ["${MAN_SECTION_CFG}"], [man page section for configuration files])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CMD_SYS], ["${MAN_SECTION_CMD_SYS}"], [man page section for system management commands])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CMD_USR], ["${MAN_SECTION_CMD_USR}"], [man page section for user commands])
+AC_DEFINE_UNQUOTED([MAN_SECTION_MISC], ["${MAN_SECTION_MISC}"], [man page section for overviews, conventions, and miscellaneous])
 
+dnl Base (number only) man page section IDs (e.g. '1', '8')
 AC_DEFINE_UNQUOTED([MAN_SECTION_API_BASE], ["${MAN_SECTION_API_BASE}"], [base (number only) man page section for library APIs])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CFG_BASE], ["${MAN_SECTION_CFG_BASE}"], [base (number only) man page section for configuration files])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CMD_SYS_BASE], ["${MAN_SECTION_CMD_SYS_BASE}"], [base (number only) man page section for system management commands])
 AC_DEFINE_UNQUOTED([MAN_SECTION_CMD_USR_BASE], ["${MAN_SECTION_CMD_USR_BASE}"], [base (number only) man page section for user commands])
+AC_DEFINE_UNQUOTED([MAN_SECTION_MISC_BASE], ["${MAN_SECTION_MISC_BASE}"], [base (number only) man page section for overviews, conventions, and miscellaneous])
 
 AC_SUBST(MAN_SECTION_API)
 AC_SUBST(MAN_SECTION_CFG)
 AC_SUBST(MAN_SECTION_CMD_SYS)
 AC_SUBST(MAN_SECTION_CMD_USR)
+AC_SUBST(MAN_SECTION_MISC)
 
 AC_SUBST(MAN_SECTION_API_BASE)
 AC_SUBST(MAN_SECTION_CFG_BASE)
 AC_SUBST(MAN_SECTION_CMD_SYS_BASE)
 AC_SUBST(MAN_SECTION_CMD_USR_BASE)
+AC_SUBST(MAN_SECTION_MISC_BASE)
+
+MAN_DIR_AS_BASE="${nut_with_docs_man_dir_as_base}"
+AC_DEFINE_UNQUOTED([MAN_DIR_AS_BASE], ["${MAN_DIR_AS_BASE}"], [are platform man directories named by base number (yes) or full section name (no)])
+AM_CONDITIONAL(MAN_DIR_AS_BASE, test "${MAN_DIR_AS_BASE}" = "yes")
+AC_SUBST(MAN_DIR_AS_BASE)
+
+dnl FIXME: handle "no" in a way to not link to distro man pages?
+dnl FIXME: spread out default templates per platform/distro some more
+dnl NOTE: FreeBSD default URLs use a query string, with an ampersand,
+dnl  which is hard to render for both docbook and man pages:
+dnl  https://man.freebsd.org/cgi/man.cgi?query={target}&sektion={0}
+dnl  Luckily, they have a fallback.
+AC_MSG_CHECKING([asciidoc template to use for linkmanext macro])
+AS_CASE([${nut_with_docs_man_linkmanext_template}],
+	[auto|yes|""|no], [AS_CASE([${target_os}],
+		[solaris*|sunos*|SunOS*|illumos*], [ASCIIDOC_TEMPLATE_LINKMANEXT='https://docs.oracle.com/cd/E86824_01/html/E54763/{target}-{0}.html'],
+		[freebsd*], [ASCIIDOC_TEMPLATE_LINKMANEXT='https://man.freebsd.org/cgi/man.cgi?{target}({0})'],
+		[openbsd*], [ASCIIDOC_TEMPLATE_LINKMANEXT='https://man.openbsd.org/man{0}/{target}.{0}'],
+			[ASCIIDOC_TEMPLATE_LINKMANEXT='https://linux.die.net/man/{0}/{target}'])],
+		[ASCIIDOC_TEMPLATE_LINKMANEXT="${nut_with_docs_man_linkmanext_template}"])
+AC_SUBST([ASCIIDOC_TEMPLATE_LINKMANEXT])
+AC_MSG_RESULT([${ASCIIDOC_TEMPLATE_LINKMANEXT}])
+
+AC_MSG_CHECKING([asciidoc template to use for linkmanext2 macro])
+AS_CASE([${nut_with_docs_man_linkmanext2_template}],
+	[auto|yes|""|no], [AS_CASE([${target_os}],
+		[solaris*|sunos*|SunOS*|illumos*], [ASCIIDOC_TEMPLATE_LINKMANEXT2='https://docs.oracle.com/cd/E86824_01/html/E54763/{target}-{2}.html'],
+		[freebsd*], [ASCIIDOC_TEMPLATE_LINKMANEXT2='https://man.freebsd.org/cgi/man.cgi?{target}({2})'],
+		[openbsd*], [ASCIIDOC_TEMPLATE_LINKMANEXT2='https://man.openbsd.org/man{2}/{target}.{2}'],
+			[ASCIIDOC_TEMPLATE_LINKMANEXT2='https://linux.die.net/man/{2}/{target}'])],
+		[ASCIIDOC_TEMPLATE_LINKMANEXT2="${nut_with_docs_man_linkmanext2_template}"])
+AC_SUBST([ASCIIDOC_TEMPLATE_LINKMANEXT2])
+AC_MSG_RESULT([${ASCIIDOC_TEMPLATE_LINKMANEXT2}])
+
+AC_MSG_CHECKING([whether to rewrite man page sections in linkmanext* macro URLs])
+AS_CASE([${nut_docs_man_linkmanext_section_rewrite}],
+	[yes|""], [ASCIIDOC_LINKMANEXT_SECTION_REWRITE="yes"],
+	[no], [ASCIIDOC_LINKMANEXT_SECTION_REWRITE="no"],
+	[auto], [AS_IF([test "${MAN_SECTION_API}${MAN_SECTION_CFG}${MAN_SECTION_CMD_SYS}${MAN_SECTION_CMD_USR}${MAN_SECTION_MISC}" = x35817],
+			[ASCIIDOC_LINKMANEXT_SECTION_REWRITE="no"],
+			[ASCIIDOC_LINKMANEXT_SECTION_REWRITE="yes"])
+		],
+		[ASCIIDOC_LINKMANEXT_SECTION_REWRITE="yes"]
+	)
+AM_CONDITIONAL(ASCIIDOC_LINKMANEXT_SECTION_REWRITE, [test "${ASCIIDOC_LINKMANEXT_SECTION_REWRITE}" = yes])
+AC_SUBST(ASCIIDOC_LINKMANEXT_SECTION_REWRITE)
+AC_MSG_RESULT([${ASCIIDOC_LINKMANEXT_SECTION_REWRITE}])
 
 dnl ----------------------------------------------------------------------
 dnl checks related to --with-dev
@@ -3855,7 +4453,7 @@ dnl    POWERDOWNFLAG, "${POWERDOWNFLAG}", [Default path for upsmon POWERDOWNFLAG
 dnl ---------------------------------------------------------------------
 AC_MSG_CHECKING(if requested driver path)
 AC_ARG_WITH(drvpath,
-	AS_HELP_STRING([--with-drvpath=PATH], [where to install UPS drivers (EPREFIX/bin)]),
+	AS_HELP_STRING([--with-drvpath=PATH], [where to install UPS drivers (legacy default: EPREFIX/bin; recommended: a subdir of libexecdir)]),
 [
 	case "${withval}" in
 	yes|no)
@@ -4120,7 +4718,7 @@ AC_MSG_RESULT([${solarispkg_ips}])
 AM_CONDITIONAL(WITH_SOLARIS_PKG_IPS, test x"$solarispkg_ips" = x"yes")
 
 
-dnl NOTE: Be sure to customize e.g.  --datarootdir=/usr/share/nut to install
+dnl NOTE: Be sure to customize e.g.  --datadir=/usr/share/nut to install
 dnl these scripts not into default location as e.g. /usr/share/solaris-smf
 AC_MSG_CHECKING(whether to install Solaris SMF files)
 solarissmf="auto"
@@ -5358,8 +5956,11 @@ AC_SUBST(OS_NAME)
 AC_SUBST(TREE_VERSION)
 AC_SUBST(NUT_NETVERSION)
 AC_SUBST(FORCE_NUT_VERSION)
+AC_SUBST(GITLOG_START_POINT)
+AC_SUBST(GITLOG_END_POINT)
 AC_SUBST(NUT_SOURCE_GITREV)
 AC_SUBST(NUT_SOURCE_GITREV_IS_RELEASE)
+AC_SUBST(NUT_SOURCE_GITREV_IS_PRERELEASE)
 AC_SUBST(NUT_SOURCE_GITREV_SEMVER)
 AC_SUBST(NUT_SOURCE_GITREV_NUMERIC)
 AC_SUBST(NUT_WEBSITE_BASE)
@@ -5902,7 +6503,18 @@ EOF
             [*/run|*/tmp|*/shm], [], dnl Do not intrude into system paths; TODO: add more if appropriate for some Linux distro
             [cat >> "${TOP_BUILDDIR}"/scripts/systemd/nut-common-tmpfiles.conf.in << EOF
 # Primarily used by upsmon and upslog, possibly running as root:
+EOF
+             AS_IF([test -z "$ALTPIDPATH" -o x"$ALTPIDPATH" != x"${PIDPATH}" && test -z "$ALTSTATEPATH" -o x"$ALTSTATEPATH" != x"${PIDPATH}"], [
+                cat >> "${TOP_BUILDDIR}"/scripts/systemd/nut-common-tmpfiles.conf.in << EOF
+d @PIDPATH@ 0750 root @RUN_AS_GROUP@ - -
+EOF
+                ], [
+                cat >> "${TOP_BUILDDIR}"/scripts/systemd/nut-common-tmpfiles.conf.in << EOF
 d @PIDPATH@ 0770 @RUN_AS_USER@ @RUN_AS_GROUP@ - -
+EOF
+                ])
+
+            cat >> "${TOP_BUILDDIR}"/scripts/systemd/nut-common-tmpfiles.conf.in << EOF
 X @PIDPATH@
 EOF
 ])])
@@ -6078,9 +6690,11 @@ AC_CONFIG_FILES([
  data/html/Makefile
  data/Makefile
  data/driver.list
+ docs/asciidoc.conf
  docs/Makefile
  docs/cables/Makefile
  docs/docinfo.xml
+ docs/man/asciidoc.conf
  docs/man/Makefile
  drivers/Makefile
  include/Makefile
@@ -6153,6 +6767,7 @@ AC_CONFIG_FILES([
 
 AC_MSG_NOTICE([Generating templated script files that should be marked executable])
 m4_foreach_w([SCRIPTFILE], [
+ docs/docinfo.xml.sh
  lib/libupsclient-config
  scripts/Aix/nut.init
  scripts/HP-UX/postinstall
@@ -6162,6 +6777,7 @@ m4_foreach_w([SCRIPTFILE], [
  scripts/external_apis/enphase/enphase-monitor
  scripts/python/app/NUT-Monitor-py2gtk2
  scripts/python/app/NUT-Monitor-py3qt5
+ scripts/python/app/NUT-Monitor-py3qt6
  scripts/python/module/test_nutclient.py
  scripts/upsdrvsvcctl/nut-driver-enumerator.sh
  scripts/upsdrvsvcctl/upsdrvsvcctl
@@ -6230,4 +6846,14 @@ AS_IF([test -s "${ABS_TOP_SRCDIR}/install-sh" && grep -w MKDIRPROG "${ABS_TOP_SR
 		 AC_MSG_WARN([This should not impact parallel builds.])
 		 AC_MSG_WARN([=====================================================])
 	])
+])
+
+AS_IF([test x"${NUT_VERSION_DEPLOYED-}" = x"<reenter>"], [
+	AC_MSG_NOTICE([==========================================================])
+	AC_MSG_NOTICE([You have configured a build for "in-place" replacement])
+	AC_MSG_NOTICE([of an existing NUT installation. You are advised to first])
+	AC_MSG_NOTICE([install into a temporary DESTDIR and verify the fliesystem])
+	AC_MSG_NOTICE([layout of the new build against what you already have.])
+	AC_MSG_NOTICE([Check INSTALL.nut.adoc for practical details and example.])
+	AC_MSG_NOTICE([==========================================================])
 ])
