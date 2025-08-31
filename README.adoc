@@ -1,15 +1,14 @@
-// This is a fork of the Network UPS Tools (NUT) project for the development
-// of a NUT driver for the UPSPlus Raspberry Pi HAT.
-// 
-// UPSPlus Driver Information:
-// - Driver file: drivers/upsplus.c
-// - UPSPlus HAT Wiki: https://wiki.52pi.com/index.php/EP-0136
-// - Based on I2C driver by Andrew Anderson <aander07@gmail.com>
-// - Maintained by David Carson <dacarson@gmail.com>
-//
-// The UPSPlus driver provides support for monitoring and controlling the UPSPlus
-// HAT via I2C communication on Raspberry Pi systems.
-//
+This is a fork of the Network UPS Tools (NUT) project for the development
+of a NUT driver for the UPSPlus Raspberry Pi HAT.
+ 
+ UPSPlus Driver Information:
+ - Driver file: drivers/upsplus.c
+ - UPSPlus HAT Wiki: https://wiki.52pi.com/index.php/EP-0136
+ - Based on I2C driver by Andrew Anderson <aander07@gmail.com>
+ - Maintained by David Carson <dacarson@gmail.com>
+
+The UPSPlus driver provides support for monitoring and controlling the UPSPlus
+HAT via I2C communication on Raspberry Pi systems.
 
 Network UPS Tools Overview
 ==========================
