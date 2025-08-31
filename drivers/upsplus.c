@@ -217,6 +217,20 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 
 #define SERIAL_NUMBER_CMD                   0xF0
 
+/* Bulk reading constants */
+#define UPSPLUS_MEMORY_START                0x01
+#define UPSPLUS_MEMORY_END                  0x2A  /* Only read up to the last useful register */
+#define UPSPLUS_MEMORY_SIZE                 (UPSPLUS_MEMORY_END - UPSPLUS_MEMORY_START + 1)
+
+/* Reserved registers that we skip */
+#define RESERVED_START                      0x2B
+#define RESERVED_END                        0xEF
+#define SERIAL_NUMBER_END                   0xFB  /* Serial number is 12 bytes starting at 0xF0 */
+
+/* Extended memory range if reading reserved registers */
+#define EXTENDED_MEMORY_END                 0xF0
+#define EXTENDED_MEMORY_SIZE                (EXTENDED_MEMORY_END - UPSPLUS_MEMORY_START + 1)
+
 /*
  * Constants used internally
  */
@@ -239,7 +253,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "1.0"
+#define DRIVER_VERSION                      "1.1"
 
 #define LENGTH_TEMP 256
 
@@ -289,6 +303,16 @@ static uint16_t usbC_power = 0;
 static uint16_t microUsb_power = 0;
 
 /*
+ * Bulk memory buffer for efficient I2C reading
+ */
+static uint8_t upsplus_memory[UPSPLUS_MEMORY_SIZE];
+static time_t last_memory_update = 0;
+static int memory_initialized = 0; /* Track if memory has been read at least once */
+static int memory_update_interval = 120; /* seconds between updates - default to 2 minutes to match battery sample period */
+static int critical_update_interval = 2; /* seconds between critical updates (power status, input voltage) */
+static int read_reserved_registers = 0; /* whether to try reading reserved registers */
+
+/*
  * Flag to track state
  */
 static uint8_t power_state = 0;
@@ -313,6 +337,19 @@ static uint16_t battery_voltage = 0;
  * Battery current is negative, discharging
  */
 static float battery_current = 0;
+
+/* Function prototypes */
+static void get_reserved_battery_low_charge(void);
+static void get_mcu_voltage(void);
+static void get_running_time(void);
+static void get_charging_time(void);
+static void get_battery_sample_period(void);
+static void get_battery_empty(void);
+static void get_battery_param_custom(void);
+static int read_upsplus_memory(void);
+static int read_critical_data(void);
+static uint16_t get_memory_word(uint8_t offset);
+static uint8_t get_memory_byte(uint8_t offset);
 
 /*
  * If the battery is draining while power is connected
@@ -430,16 +467,225 @@ static inline int open_i2c_bus(char *path, uint8_t addr)
   return file;
 }
 
+/*
+ * Read the entire UPSPlus memory range into local buffer
+ * This is much more efficient than individual register reads
+ */
+static int read_upsplus_memory(void)
+{
+  time_t now;
+  int i, fd;
+  uint8_t cmd = UPSPLUS_MEMORY_START;
+  int success_count = 0;
+  int memory_size = read_reserved_registers ? EXTENDED_MEMORY_SIZE : UPSPLUS_MEMORY_SIZE;
+  int total_chunks = (memory_size + I2C_SMBUS_BLOCK_MAX - 1) / I2C_SMBUS_BLOCK_MAX;
+  
+  time(&now);
+  
+  /* Always update on first run or if enough time has passed */
+  if (memory_initialized && (now - last_memory_update < memory_update_interval)) {
+    upsdebugx(3, "Memory update not due yet. Last update: %lds ago, interval: %ds", 
+              now - last_memory_update, memory_update_interval);
+    return 0;
+  }
+  
+  if (memory_initialized) {
+    upsdebugx(2, "Memory update due. Last update: %lds ago, interval: %ds", 
+              now - last_memory_update, memory_update_interval);
+  } else {
+    upsdebugx(2, "First memory read - initializing memory buffer");
+  }
+  
+  upsdebugx(2, "Current memory update interval: %d seconds", memory_update_interval);
+  
+  if (read_reserved_registers) {
+    upsdebugx(3, "Reading extended UPSPlus memory range (0x%02X-0x%02X) including reserved registers", 
+              UPSPLUS_MEMORY_START, EXTENDED_MEMORY_END);
+  } else {
+    upsdebugx(3, "Reading UPSPlus memory range (0x%02X-0x%02X) - skipping reserved registers", 
+              UPSPLUS_MEMORY_START, UPSPLUS_MEMORY_END);
+  }
+  
+  fd = open_i2c_bus(i2c_bus_path, UPSPLUS_I2C_ADDRESS);
+  if (fd < 0) {
+    return -1;
+  }
+  
+  /* Read memory in chunks since I2C block read has limitations */
+  for (i = 0; i < memory_size; i += I2C_SMBUS_BLOCK_MAX) {
+    int chunk_size = (i + I2C_SMBUS_BLOCK_MAX <= memory_size) ? 
+                     I2C_SMBUS_BLOCK_MAX : memory_size - i;
+    
+    if (i2c_smbus_read_i2c_block_data(fd, cmd + i, chunk_size, 
+                                      &upsplus_memory[i]) < 0) {
+      upsdebugx(2, "Failed to read memory chunk starting at 0x%02X, filling with zeros", cmd + i);
+      /* Fill failed chunk with zeros instead of failing completely */
+      memset(&upsplus_memory[i], 0, chunk_size);
+    } else {
+      success_count++;
+    }
+  }
+  
+  close(fd);
+  
+  if (success_count > 0) {
+    last_memory_update = now;
+    memory_initialized = 1; /* Mark that we've successfully read memory at least once */
+    upsdebugx(2, "Successfully read %d/%d chunks of UPSPlus memory", success_count, total_chunks);
+    
+    /* Log which registers we successfully read */
+    if (read_reserved_registers) {
+      upsdebugx(3, "Successfully read registers: 0x%02X-0x%02X", 
+                UPSPLUS_MEMORY_START, EXTENDED_MEMORY_END);
+      upsdebugx(3, "Memory buffer contains: %d bytes of data", memory_size);
+    } else {
+      upsdebugx(3, "Successfully read registers: 0x%02X-0x%02X", 
+                UPSPLUS_MEMORY_START, UPSPLUS_MEMORY_END);
+      upsdebugx(3, "Memory buffer contains: %d bytes of data", memory_size);
+    }
+    
+    return 0; /* Success even with partial reads */
+  } else {
+    upsdebugx(1, "Failed to read any memory chunks");
+    return -1; /* Only fail if no chunks were read */
+  }
+}
+
+/*
+ * Read only critical real-time data that can change at any moment
+ * This includes power status, input voltage, and basic UPS state
+ */
+static int read_critical_data(void)
+{
+  time_t now;
+  int fd;
+  uint8_t data;
+  
+  time(&now);
+  
+  /* Only update if enough time has passed since last critical update */
+  static time_t last_critical_update = 0;
+  if (now - last_critical_update < critical_update_interval) {
+    return 0;
+  }
+  
+  upsdebugx(2, "Reading critical real-time data (power status, input voltage, battery state)");
+  
+  fd = open_i2c_bus(i2c_bus_path, UPSPLUS_I2C_ADDRESS);
+  if (fd < 0) {
+    return -1;
+  }
+  
+  /* Read power status */
+  if (i2c_smbus_read_byte_data(fd, POWER_STATUS_CMD) >= 0) {
+    data = i2c_smbus_read_byte_data(fd, POWER_STATUS_CMD);
+    upsdebugx(3, "Critical update: Power status: 0x%02X", data);
+  }
+  
+  /* Read USB-C voltage */
+  if (i2c_smbus_read_word_data(fd, USBC_VOLTAGE_CMD) >= 0) {
+    uint16_t voltage = i2c_smbus_read_word_data(fd, USBC_VOLTAGE_CMD);
+    usbC_power = voltage;
+    upsdebugx(3, "Critical update: USB-C voltage: %0.3fV", voltage / 1000.0);
+  }
+  
+  /* Read MicroUSB voltage */
+  if (i2c_smbus_read_word_data(fd, MICROUSB_VOLTAGE_CMD) >= 0) {
+    uint16_t voltage = i2c_smbus_read_word_data(fd, MICROUSB_VOLTAGE_CMD);
+    microUsb_power = voltage;
+    upsdebugx(3, "Critical update: MicroUSB voltage: %0.3fV", voltage / 1000.0);
+  }
+  
+  /* Read battery voltage - critical for status determination */
+  if (i2c_smbus_read_word_data(fd, BATTERY_VOLTAGE_CMD) >= 0) {
+    int16_t voltage = i2c_smbus_read_word_data(fd, BATTERY_VOLTAGE_CMD);
+    battery_voltage = voltage;
+    upsdebugx(3, "Critical update: Battery voltage: %0.3fV", voltage / 1000.0);
+  }
+  
+  /* Read battery charge level - critical for status determination */
+  if (i2c_smbus_read_word_data(fd, CHARGE_LEVEL_CMD) >= 0) {
+    uint16_t charge = i2c_smbus_read_word_data(fd, CHARGE_LEVEL_CMD);
+    battery_charge_level = charge;
+    upsdebugx(3, "Critical update: Battery charge: %d%%", charge);
+  }
+  
+  /* Read output voltage - important for load status */
+  if (i2c_smbus_read_word_data(fd, OUTPUT_VOLTAGE_CMD) >= 0) {
+    uint16_t voltage = i2c_smbus_read_word_data(fd, OUTPUT_VOLTAGE_CMD);
+    upsdebugx(3, "Critical update: Output voltage: %0.3fV", voltage / 1000.0);
+  }
+  
+  close(fd);
+  
+  /* Read battery current from INA219 - critical for charging/discharging status */
+  int battery_fd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
+  if (battery_fd >= 0) {
+    /* Configure INA219 */
+    i2c_smbus_write_word_data(battery_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE);
+    i2c_smbus_write_word_data(battery_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC);
+    
+    /* Read current */
+    int16_t current_data = i2c_smbus_read_word_data(battery_fd, INA219_CURRENT_CMD);
+    if (current_data >= 0) {
+      /* Swap bytes for INA219 */
+      current_data = (current_data >> 8) | (current_data << 8);
+      battery_current = (int16_t)current_data * BATTERY_CURRENT_LSB_MAGIC;
+      upsdebugx(3, "Critical update: Battery current: %0.3fA", battery_current);
+    }
+    close(battery_fd);
+  }
+  
+  last_critical_update = now;
+  upsdebugx(2, "Critical data updated successfully");
+  
+  return 0;
+}
+
+/*
+ * Helper function to read a word (16-bit) value from memory buffer
+ */
+static uint16_t get_memory_word(uint8_t offset)
+{
+  int memory_size = read_reserved_registers ? EXTENDED_MEMORY_SIZE : UPSPLUS_MEMORY_SIZE;
+  
+  if (offset + 1 >= memory_size) {
+    upsdebugx(3, "Memory read offset 0x%02X out of range (max: 0x%02X)", offset, memory_size - 1);
+    return 0;
+  }
+  return (upsplus_memory[offset + 1] << 8) | upsplus_memory[offset];
+}
+
+/*
+ * Helper function to read a byte value from memory buffer
+ */
+static uint8_t get_memory_byte(uint8_t offset)
+{
+  int memory_size = read_reserved_registers ? EXTENDED_MEMORY_SIZE : UPSPLUS_MEMORY_SIZE;
+  
+  if (offset >= memory_size) {
+    upsdebugx(3, "Memory read offset 0x%02X out of range (max: 0x%02X)", offset, memory_size - 1);
+    return 0;
+  }
+  return upsplus_memory[offset];
+}
+
 static void get_charge_level(void)
 {
-  uint8_t cmd = CHARGE_LEVEL_CMD;
-  uint16_t data = battery_charge_level;
+  uint16_t data;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_WORD(upsfd, cmd, __func__)
-  
-  battery_charge_level = data;
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(CHARGE_LEVEL_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    upsdebugx(3, "Memory not available, falling back to direct I2C read for charge level");
+    I2C_READ_WORD(upsfd, CHARGE_LEVEL_CMD, __func__)
+  } else {
+    battery_charge_level = data;
+    upsdebugx(3, "Read charge level from memory buffer: %d%%", data);
+  }
   
   upsdebugx(1, "Battery Charge Level: %d%%", battery_charge_level);
   if (battery_charge_level < 110) {
@@ -448,15 +694,20 @@ static void get_charge_level(void)
     dstate_setinfo("battery.charge", "%d", battery_charge_level);
     upsdebugx(2, "Battery Charge Level out of range, skipping");
   }
+}
 
 static void get_output_voltage(void)
 {
-  uint8_t cmd = OUTPUT_VOLTAGE_CMD;
   uint16_t data;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_WORD(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(OUTPUT_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, OUTPUT_VOLTAGE_CMD, __func__)
+  }
   
   upsdebugx(1, "Output voltage: %0.3fV", data / 1000.0);
   if (data > OUTPUT_VOLTAGE_MINIMUM || data < OUTPUT_VOLTAGE_MAXIMUM) {
@@ -468,13 +719,17 @@ static void get_output_voltage(void)
 
 static void get_battery_full(void)
 {
-  uint8_t cmd = BATTERY_FULL_CMD;
   int16_t data = battery_full;
   
   upsdebugx(3, __func__);
   
   if (battery_full < 0) {
-    I2C_READ_WORD(upsfd, cmd, __func__)
+    /* Read from memory buffer instead of I2C */
+    data = get_memory_word(BATTERY_FULL_CMD - UPSPLUS_MEMORY_START);
+    if (data == 0 && last_memory_update == 0) {
+      /* Fallback to direct I2C if memory hasn't been read yet */
+      I2C_READ_WORD(upsfd, BATTERY_FULL_CMD, __func__)
+    }
     battery_full = data;
   }
   
@@ -505,13 +760,17 @@ static void set_battery_full(uint16_t data)
 
 static void get_battery_low(void)
 {
-  uint8_t cmd = BATTERY_PROTECTION_CMD;
   int16_t data = battery_low;
   
   upsdebugx(3, __func__);
   
   if (battery_low < 0) {
-    I2C_READ_WORD(upsfd, cmd, __func__)
+    /* Read from memory buffer instead of I2C */
+    data = get_memory_word(BATTERY_PROTECTION_CMD - UPSPLUS_MEMORY_START);
+    if (data == 0 && last_memory_update == 0) {
+      /* Fallback to direct I2C if memory hasn't been read yet */
+      I2C_READ_WORD(upsfd, BATTERY_PROTECTION_CMD, __func__)
+    }
     battery_low = data;
   }
   
@@ -561,27 +820,8 @@ static void set_battery_low(uint16_t data)
 
 static void get_charge_low(void)
 {
-  uint8_t cmd = RESERVED_BATTERY_LOW_CHARGE_CMD;
-  uint16_t data = battery_charge_low;
-  
-  upsdebugx(3, __func__);
-  
-  I2C_READ_WORD(upsfd, cmd, __func__)
-  if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
-    upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
-    if ((data & BATTERY_LOW_CHARGE_MASK) < 100) {
-      upsdebugx(3, "Low Charge Threshold is within range");
-      battery_charge_low = (data & BATTERY_LOW_CHARGE_MASK);
-    }
-  }
-  
-  upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
-  if (battery_charge_low <= 100) {
-    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
-  } else {
-    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
-    upsdebugx(2, "Low Charge Threshold out of range, skipping");
-  }
+  /* Use the separate function for reserved registers */
+  get_reserved_battery_low_charge();
 }
 
 static void set_charge_low(int16_t data)
@@ -604,37 +844,13 @@ static void set_charge_low(int16_t data)
   dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
 }
 
-static void get_UsbC_Voltage(void)
-{
-  uint8_t cmd = USBC_VOLTAGE_CMD;
-  uint16_t data;
-  
-  upsdebugx(3, __func__);
-  
-  I2C_READ_WORD(upsfd, cmd, __func__)
-  
-  usbC_power = data;
-  
-  upsdebugx(2, "USB-C Voltage: %0.3fV", data / 1000.0);
-}
 
-static void get_MicroUsb_Voltage(void)
-{
-  uint8_t cmd = MICROUSB_VOLTAGE_CMD;
-  uint16_t data;
-  
-  upsdebugx(3, __func__);
-  
-  I2C_READ_WORD(upsfd, cmd, __func__)
-  
-  microUsb_power = data;
-  
-  upsdebugx(2, "Micro USB Voltage: %0.3fV", data / 1000.0);
-}
+
+
 
 static void get_status(void)
 {
-  uint8_t cmd = POWER_STATUS_CMD, data;
+  uint8_t data;
   char status_buf[ST_MAX_VALUE_LEN];
   time_t now;
   
@@ -642,7 +858,17 @@ static void get_status(void)
   
   memset(status_buf, 0, ST_MAX_VALUE_LEN);
   
-  I2C_READ_BYTE(upsfd, cmd, __func__)
+  /* Use critical data that was already read, or fall back to memory buffer */
+  if (last_memory_update > 0) {
+    data = get_memory_byte(POWER_STATUS_CMD - UPSPLUS_MEMORY_START);
+    if (data == 0) {
+      /* Fallback to direct I2C if memory data is invalid */
+      I2C_READ_BYTE(upsfd, POWER_STATUS_CMD, __func__)
+    }
+  } else {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_BYTE(upsfd, POWER_STATUS_CMD, __func__)
+  }
   
   if (data == 1) {
     upsdebugx(1, "Power status: normal");
@@ -659,6 +885,7 @@ static void get_status(void)
     status_set("OL");
   }
   
+  /* Battery low/full values are cached and don't change frequently */
   get_battery_low();
   get_battery_full();
 
@@ -708,12 +935,16 @@ static void get_status(void)
 
 static void get_battery_temperature(void)
 {
-  uint8_t cmd = BATTERY_TEMPERATURE_CMD;
   int16_t data;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_WORD(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_TEMPERATURE_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, BATTERY_TEMPERATURE_CMD, __func__)
+  }
   
   upsdebugx(1, "Battery Temperature: %d°C", data);
   if (data >=  BATTERY_TEMPERATURE_MINIMUM &&
@@ -726,13 +957,16 @@ static void get_battery_temperature(void)
 
 static void get_battery_voltage(void)
 {
-  uint8_t cmd = BATTERY_VOLTAGE_CMD;
   int16_t data = battery_voltage;
   
   upsdebugx(3, __func__);
   
-  
-  I2C_READ_WORD(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, BATTERY_VOLTAGE_CMD, __func__)
+  }
   battery_voltage = data;
   
   upsdebugx(1, "Battery Voltage: %0.3fV", data / 1000.0);
@@ -877,12 +1111,16 @@ static void get_realtime_battery_state(void)
 
 static void get_firmware_version(void)
 {
-  uint8_t cmd = FIRMWARE_VERSION_CMD;
   uint16_t data = 0;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_WORD(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(FIRMWARE_VERSION_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, FIRMWARE_VERSION_CMD, __func__)
+  }
   
   firmware_version = data;
   
@@ -892,13 +1130,23 @@ static void get_firmware_version(void)
 
 static void get_serial_number(void)
 {
-  uint8_t cmd = SERIAL_NUMBER_CMD;
-  __u8 block[I2C_SMBUS_BLOCK_MAX];
+  __u8 block[12];
   char serial_number[LENGTH_TEMP];
   
   upsdebugx(3, __func__);
   
-  I2C_READ_BLOCK(upsfd, cmd, 12, block, __func__)
+  /* Read from memory buffer instead of I2C */
+  if (last_memory_update > 0) {
+    /* Read 12 bytes from memory buffer */
+    if (SERIAL_NUMBER_CMD - UPSPLUS_MEMORY_START + 11 < UPSPLUS_MEMORY_SIZE) {
+      memcpy(block, &upsplus_memory[SERIAL_NUMBER_CMD - UPSPLUS_MEMORY_START], 12);
+    } else {
+      memset(block, 0, 12);
+    }
+  } else {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_BLOCK(upsfd, SERIAL_NUMBER_CMD, 12, block, __func__)
+  }
   
   snprintf(serial_number, sizeof(serial_number), "%08X-%08X-%08X",
            (block[3] << 24 | block[2] << 16 | block[1] << 8 | block[0]),
@@ -936,6 +1184,201 @@ static void get_battery_nominal(void)
   dstate_setinfo("battery.voltage.nominal", "%0.3f", data / 1000.0);
 }
 
+/*
+ * Read MCU voltage from memory buffer
+ */
+static void get_mcu_voltage(void)
+{
+  uint16_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(MCU_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, MCU_VOLTAGE_CMD, __func__)
+  }
+  
+  upsdebugx(1, "MCU Voltage: %0.3fV", data / 1000.0);
+  if (data > 0 && data < 10000) { /* Reasonable range 0-10V */
+    dstate_setinfo("ups.mcu.voltage", "%0.3f", data / 1000.0);
+  }
+}
+
+/*
+ * Read running time from memory buffer
+ */
+static void get_running_time(void)
+{
+  uint32_t running_time;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  if (last_memory_update > 0) {
+    /* Read 4 bytes from memory buffer */
+    if (RUNNING_TIME_CMD - UPSPLUS_MEMORY_START + 3 < UPSPLUS_MEMORY_SIZE) {
+      running_time = (upsplus_memory[RUNNING_TIME_CMD - UPSPLUS_MEMORY_START + 3] << 24) |
+                     (upsplus_memory[RUNNING_TIME_CMD - UPSPLUS_MEMORY_START + 2] << 16) |
+                     (upsplus_memory[RUNNING_TIME_CMD - UPSPLUS_MEMORY_START + 1] << 8) |
+                     upsplus_memory[RUNNING_TIME_CMD - UPSPLUS_MEMORY_START];
+    } else {
+      running_time = 0;
+    }
+  } else {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    __u8 block[I2C_SMBUS_BLOCK_MAX];
+    I2C_READ_BLOCK(upsfd, RUNNING_TIME_CMD, 4, block, __func__)
+    running_time = (block[3] << 24) | (block[2] << 16) | (block[1] << 8) | block[0];
+  }
+  
+  upsdebugx(1, "Running time: %ds", running_time);
+  dstate_setinfo("ups.runtime", "%d", running_time);
+}
+
+/*
+ * Read charging time from memory buffer
+ */
+static void get_charging_time(void)
+{
+  uint32_t charging_time;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  if (last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    __u8 block[I2C_SMBUS_BLOCK_MAX];
+    I2C_READ_BLOCK(upsfd, CHARGING_TIME_CMD, 4, block, __func__)
+    charging_time = (block[3] << 24) | (block[2] << 16) | (block[1] << 8) | block[0];
+  } else {
+    /* Read 4 bytes from memory buffer */
+    if (CHARGING_TIME_CMD - UPSPLUS_MEMORY_START + 3 < UPSPLUS_MEMORY_SIZE) {
+      charging_time = (upsplus_memory[CHARGING_TIME_CMD - UPSPLUS_MEMORY_START + 3] << 24) |
+                      (upsplus_memory[CHARGING_TIME_CMD - UPSPLUS_MEMORY_START + 2] << 16) |
+                      (upsplus_memory[CHARGING_TIME_CMD - UPSPLUS_MEMORY_START + 1] << 8) |
+                      upsplus_memory[CHARGING_TIME_CMD - UPSPLUS_MEMORY_START];
+    } else {
+      charging_time = 0;
+    }
+  }
+  
+  upsdebugx(1, "Charging time: %ds", charging_time);
+  dstate_setinfo("battery.charging.time", "%d", charging_time);
+}
+
+/*
+ * Read battery sample period from memory buffer
+ */
+static void get_battery_sample_period(void)
+{
+  uint16_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_SAMPLE_PERIOD_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, BATTERY_SAMPLE_PERIOD_CMD, __func__)
+  }
+  
+  upsdebugx(1, "Battery sample period: %d minutes", data);
+  if (data >= BATTERY_SAMPLE_PERIOD_MINIMUM && data <= BATTERY_SAMPLE_PERIOD_MAXIMUM) {
+    dstate_setinfo("battery.sample.period", "%d", data);
+    
+    /* Align memory update interval with battery sample period for efficiency */
+    int new_interval = data * 60; /* Convert minutes to seconds */
+    
+    /* Ensure minimum reasonable interval to avoid excessive I2C traffic */
+    if (new_interval < 30) {
+      new_interval = 30;
+      upsdebugx(2, "Adjusted memory update interval to minimum 30 seconds (requested: %d seconds)", data * 60);
+    }
+    
+    if (new_interval != memory_update_interval) {
+      upsdebugx(2, "Adjusting memory update interval from %d to %d seconds to match battery sample period", 
+                memory_update_interval, new_interval);
+      memory_update_interval = new_interval;
+    }
+  }
+}
+
+/*
+ * Read battery empty voltage from memory buffer
+ */
+static void get_battery_empty(void)
+{
+  int16_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_EMPTY_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_WORD(upsfd, BATTERY_EMPTY_CMD, __func__)
+  }
+  
+  upsdebugx(1, "Battery Voltage Empty: %0.3fV", data / 1000.0);
+  if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    dstate_setinfo("battery.voltage.empty", "%0.3f", data / 1000.0);
+  }
+}
+
+/*
+ * Read battery parameter custom setting from memory buffer
+ */
+static void get_battery_param_custom(void)
+{
+  uint8_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_byte(BATTERY_PARAM_CUSTOM_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_BYTE(upsfd, BATTERY_PARAM_CUSTOM_CMD, __func__)
+  }
+  
+  upsdebugx(1, "Battery parameter custom: %s", 
+            data == BATTERY_PARAM_CUSTOM_ENABLE ? "enabled" : "disabled");
+  dstate_setinfo("battery.param.custom", "%s", 
+                 data == BATTERY_PARAM_CUSTOM_ENABLE ? "enabled" : "disabled");
+}
+
+/*
+ * Read the reserved battery low charge register separately
+ * since it's outside our main memory range
+ */
+static void get_reserved_battery_low_charge(void)
+{
+  uint16_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* This register is outside our main memory range, so always read directly */
+  I2C_READ_WORD(upsfd, RESERVED_BATTERY_LOW_CHARGE_CMD, __func__)
+  
+  if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
+    upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
+    if ((data & BATTERY_LOW_CHARGE_MASK) < 100) {
+      upsdebugx(3, "Low Charge Threshold is within range");
+      battery_charge_low = (data & BATTERY_LOW_CHARGE_MASK);
+    }
+  }
+  
+  upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
+  if (battery_charge_low <= 100) {
+    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
+  } else {
+    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
+    upsdebugx(2, "Low Charge Threshold out of range, skipping");
+  }
+}
+
 static void reset_shutdown_restart_timers(void)
 {
   upsdebugx(3, __func__);
@@ -946,12 +1389,16 @@ static void reset_shutdown_restart_timers(void)
 
 static void get_power_off_timer(void)
 {
-  uint8_t cmd = SHUTDOWN_TIMER_CMD;
   uint8_t data;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_BYTE(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_byte(SHUTDOWN_TIMER_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_BYTE(upsfd, SHUTDOWN_TIMER_CMD, __func__)
+  }
   
   upsdebugx(1, "Shutdown Timer: %ds", data);
   dstate_setinfo("ups.timer.shutdown", "%d", data);
@@ -972,12 +1419,16 @@ static void set_power_off_timer(const short data)
 
 static void get_reboot_timer(void)
 {
-  uint8_t cmd = RESTART_TIMER_CMD;
   uint8_t data;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_BYTE(upsfd, cmd, __func__)
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_byte(RESTART_TIMER_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && last_memory_update == 0) {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    I2C_READ_BYTE(upsfd, RESTART_TIMER_CMD, __func__)
+  }
   
   upsdebugx(1, "Reboot Timer: %ds", data);
   dstate_setinfo("ups.timer.reboot", "%d", data);
@@ -998,12 +1449,16 @@ static void set_reboot_timer(const short data)
 
 static void get_ups_auto_restart(void)
 {
-  uint8_t cmd = WAKEUP_ON_CHARGE_CMD;
   uint8_t data = ups_auto_restart;
   
   if (ups_auto_restart < 0) {
     upsdebugx(3, __func__);
-    I2C_READ_BYTE(upsfd, cmd, __func__)
+    /* Read from memory buffer instead of I2C */
+    data = get_memory_byte(WAKEUP_ON_CHARGE_CMD - UPSPLUS_MEMORY_START);
+    if (data == 0 && last_memory_update == 0) {
+      /* Fallback to direct I2C if memory hasn't been read yet */
+      I2C_READ_BYTE(upsfd, WAKEUP_ON_CHARGE_CMD, __func__)
+    }
   }
   
   if (data == WAKEUP_ON_CHARGE_ENABLE) {
@@ -1036,21 +1491,37 @@ static void set_ups_auto_restart(const short data)
 
 static void get_ups_uptime(void)
 {
-  uint8_t cmd = UPTIME_CMD;
-  __u8 block[I2C_SMBUS_BLOCK_MAX];
+  uint32_t uptime;
   
   upsdebugx(3, __func__);
   
-  I2C_READ_BLOCK(upsfd, cmd, 4, block, __func__)
+  /* Read from memory buffer instead of I2C */
+  if (last_memory_update > 0) {
+    /* Read 4 bytes from memory buffer */
+    if (UPTIME_CMD - UPSPLUS_MEMORY_START + 3 < UPSPLUS_MEMORY_SIZE) {
+      uptime = (upsplus_memory[UPTIME_CMD - UPSPLUS_MEMORY_START + 3] << 24) |
+               (upsplus_memory[UPTIME_CMD - UPSPLUS_MEMORY_START + 2] << 16) |
+               (upsplus_memory[UPTIME_CMD - UPSPLUS_MEMORY_START + 1] << 8) |
+               upsplus_memory[UPTIME_CMD - UPSPLUS_MEMORY_START];
+    } else {
+      uptime = 0;
+    }
+  } else {
+    /* Fallback to direct I2C if memory hasn't been read yet */
+    __u8 block[I2C_SMBUS_BLOCK_MAX];
+    I2C_READ_BLOCK(upsfd, UPTIME_CMD, 4, block, __func__)
+    uptime = (block[3] << 24) | (block[2] << 16) | (block[1] << 8) | block[0];
+  }
   
-  upsdebugx(1, "Device uptime: %ds", (block[3] << 24 | block[2] << 16 | block[1] << 8 | block[0]));
-  dstate_setinfo("device.uptime", "%d", (block[3] << 24 | block[2] << 16 | block[1] << 8 | block[0]));
+  upsdebugx(1, "Device uptime: %ds", uptime);
+  dstate_setinfo("device.uptime", "%d", uptime);
 }
 
 static void check_operating_state(void)
 {
-  get_UsbC_Voltage();
-  get_MicroUsb_Voltage();
+  /* Use the critical data that was already read, don't read again */
+  upsdebugx(3, "Checking operating state with USB-C: %0.3fV, MicroUSB: %0.3fV", 
+            usbC_power / 1000.0, microUsb_power / 1000.0);
   
   if (usbC_power > USB_VOLTAGE_MINIMUM) {
     power_state = USBC_POWER_CONNECTED;
@@ -1249,6 +1720,29 @@ void upsdrv_initinfo(void)
   }
   get_serial_number();
   
+  /* Read initial battery sample period to set memory update interval */
+  uint16_t initial_sample_period;
+  upsdebugx(1, "Initial memory update interval: %d seconds", memory_update_interval);
+  
+  if (i2c_smbus_read_word_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD) > 0) {
+    initial_sample_period = i2c_smbus_read_word_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD);
+    upsdebugx(1, "Read initial battery sample period: %d minutes", initial_sample_period);
+    
+    if (initial_sample_period >= BATTERY_SAMPLE_PERIOD_MINIMUM && initial_sample_period <= BATTERY_SAMPLE_PERIOD_MAXIMUM) {
+      memory_update_interval = initial_sample_period * 60;
+      
+      /* Ensure minimum reasonable interval */
+      if (memory_update_interval < 30) {
+        memory_update_interval = 30;
+        upsdebugx(1, "Initial memory update interval adjusted to minimum 30 seconds");
+      }
+      
+      upsdebugx(1, "Initial memory update interval set to %d seconds based on UPS battery sample period", memory_update_interval);
+    }
+  } else {
+    upsdebugx(1, "Could not read initial battery sample period, keeping default: %d seconds", memory_update_interval);
+  }
+  
   /* Setup functions */
   upsh.setvar = upsplus_setvar;
   upsh.instcmd = upsplus_instcmd;
@@ -1284,21 +1778,52 @@ void upsdrv_initinfo(void)
 
 void upsdrv_updateinfo(void)
 {
+  static int update_count = 0;
+  static time_t last_update_call = 0;
+  time_t now;
+  
+  update_count++;
+  time(&now);
+  
+  if (last_update_call > 0) {
+    upsdebugx(2, "upsdrv_updateinfo() called #%d times, %lds since last call", 
+              update_count, now - last_update_call);
+  } else {
+    upsdebugx(2, "upsdrv_updateinfo() called #%d times (first call)", update_count);
+  }
+  last_update_call = now;
+  
+  /* Read critical real-time data (power status, input voltage) - updated frequently */
+  int critical_result = read_critical_data();
+  upsdebugx(2, "read_critical_data() returned: %d", critical_result);
+  
+  /* Read entire memory buffer for efficient access - updated at battery sample interval */
+  /* Note: Critical data (power status, battery voltage/current, input/output voltage) */
+  /* is already updated every 2 seconds, so status determination uses fresh data */
+  int memory_result = read_upsplus_memory();
+  upsdebugx(2, "read_upsplus_memory() returned: %d", memory_result);
+  
   get_battery_full();
   get_battery_low();
+  get_battery_empty();
   get_charge_low();
   get_battery_nominal();
+  get_battery_param_custom();
   
   get_battery_temperature();
   get_battery_voltage();
   get_output_voltage();
   get_charge_level();
+  get_mcu_voltage();
   get_realtime_battery_state();
   get_realtime_output_state();
   
   check_operating_state();
   
   get_ups_uptime();
+  get_running_time();
+  get_charging_time();
+  get_battery_sample_period();
   get_power_off_timer();
   get_reboot_timer();
   get_ups_auto_restart();
@@ -1324,6 +1849,12 @@ void upsdrv_help(void)
   printf("By default UPSPlus appears on i2c bus 1, so port should be set to '/dev/i2c-1'.\n");
   printf("The /dev/i2c-1 device needs to be world RW permissions, aka 'sudo chmod a+rw /dev/i2c-1'.\n");
   printf("\n");
+  printf("OPTIMIZATION:\n");
+  printf("The driver uses a hybrid approach for optimal performance:\n");
+  printf("- Critical data (power status, battery voltage/current, input/output voltage) is updated every 2 seconds\n");
+  printf("- Battery data is updated at the UPS battery sample interval (typically 2+ minutes)\n");
+  printf("- This ensures fast response to power events while minimizing I2C traffic\n");
+  printf("\n");
 }
 
 void upsdrv_makevartable(void)
@@ -1333,6 +1864,12 @@ void upsdrv_makevartable(void)
   addvar(VAR_FLAG, "batteryreset", "Reset Battery min/max/low to automatic settings and exit.");
   
   addvar(VAR_VALUE, "sampleperiod", "Set number of minutes between sampling battery state (1 - 1440, default: 2)");
+  
+  addvar(VAR_VALUE, "memoryinterval", "Set memory update interval in seconds (1 - 60, default: 1)");
+  
+  addvar(VAR_VALUE, "criticalinterval", "Set critical update interval in seconds (1 - 30, default: 2)");
+  
+  addvar(VAR_FLAG, "readreserved", "Try to read reserved registers (may cause errors)");
 }
 
 void upsdrv_initups(void)
@@ -1362,9 +1899,45 @@ void upsdrv_initups(void)
       i2c_smbus_write_byte_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD, sampleperiod & 0xFF);
       i2c_smbus_write_byte_data(upsfd, BATTERY_SAMPLE_PERIOD_CMD + 1, (sampleperiod >> 8) & 0xFF);
       upsdebugx(1, "Updated sample period to: %d", sampleperiod);
+      
+      /* Also update memory update interval to match */
+      memory_update_interval = sampleperiod * 60;
+      
+      /* Ensure minimum reasonable interval */
+      if (memory_update_interval < 30) {
+        memory_update_interval = 30;
+        upsdebugx(1, "Memory update interval adjusted to minimum 30 seconds");
+      }
+      
+      upsdebugx(1, "Memory update interval set to %d seconds to match battery sample period", memory_update_interval);
     } else {
       upsdebugx(1, "Ignoring sampleperiod, out of range: %s", getval("sampleperiod"));
     }
+  }
+  
+  if (getval("memoryinterval") != NULL) {
+    int interval;
+    if (str_to_int(getval("memoryinterval"), &interval, 10) && interval >= 1 && interval <= 60) {
+      memory_update_interval = interval;
+      upsdebugx(1, "Updated memory update interval to: %d seconds", interval);
+    } else {
+      upsdebugx(1, "Ignoring memoryinterval, out of range: %s", getval("memoryinterval"));
+    }
+  }
+  
+  if (getval("criticalinterval") != NULL) {
+    int interval;
+    if (str_to_int(getval("criticalinterval"), &interval, 10) && interval >= 1 && interval <= 30) {
+      critical_update_interval = interval;
+      upsdebugx(1, "Updated critical update interval to: %d seconds", interval);
+    } else {
+      upsdebugx(1, "Ignoring criticalinterval, out of range: %s", getval("criticalinterval"));
+    }
+  }
+  
+  if (testvar("readreserved")) {
+    read_reserved_registers = 1;
+    upsdebugx(1, "Will attempt to read reserved registers");
   }
 }
 
