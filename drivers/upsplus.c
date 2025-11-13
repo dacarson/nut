@@ -310,6 +310,16 @@ static int critical_update_interval = 2; /* seconds between critical updates (po
 static int read_reserved_registers = 0; /* whether to try reading reserved registers */
 
 /*
+ * Bulk memory buffer for efficient I2C reading
+ */
+static uint8_t upsplus_memory[UPSPLUS_MEMORY_SIZE];
+static time_t last_memory_update = 0;
+static int memory_initialized = 0; /* Track if memory has been read at least once */
+static int memory_update_interval = 120; /* seconds between updates - default to 2 minutes to match battery sample period */
+static int critical_update_interval = 2; /* seconds between critical updates (power status, input voltage) */
+static int read_reserved_registers = 0; /* whether to try reading reserved registers */
+
+/*
  * Flag to track state
  */
 static uint8_t power_state = 0;
@@ -432,7 +442,7 @@ upsdrv_info_t upsdrv_info = {
   data = (uint16_t)( (sData >> 8) | (sData << 8) ); \
 }
 
- #define I2C_WRITE_WORD_INA219(fd, cmd, value, label) \
+#define I2C_WRITE_WORD_INA219(fd, cmd, value, label) \
 { \
   if ( i2c_smbus_write_word_data(fd, cmd, (__u16)((value >> 8) | (value << 8))) < 0 ) { \
     upsdebugx(2, "Failure writing to the i2c bus [%s]", label); \
@@ -450,6 +460,7 @@ static inline int reg16_matches(__s32 readv, uint16_t desired)
   uint16_t vs = (uint16_t)((v >> 8) | (v << 8));
   return (vs == desired);
 }
+
 static inline int open_i2c_bus(char *path, uint8_t addr)
 {
   int file;
@@ -603,15 +614,6 @@ static int read_critical_data(void)
     close(output_fd);
   }
   
-  if (memory_initialized) {
-	/* Pull POWER_STATUS and CHARGE_LEVEL from validated memory buffer */
-	uint8_t ps_cached  = get_memory_byte(POWER_STATUS_CMD - UPSPLUS_MEMORY_START);
-	uint16_t cl_cached = get_memory_word(CHARGE_LEVEL_CMD - UPSPLUS_MEMORY_START);
-	upsdebugx(3, "Critical update (mem): Power status: 0x%02X", (unsigned int)ps_cached & 0xFF);
-	upsdebugx(3, "Critical update (mem): Battery charge: %u%%", (unsigned)cl_cached);
-	battery_charge_level = cl_cached;
-  }
-  
   last_critical_update = now;
   upsdebugx(2, "Critical data updated successfully");
   
@@ -665,19 +667,19 @@ static void get_charge_level(void)
   
   /* Read from memory buffer instead of I2C */
   data = get_memory_word(CHARGE_LEVEL_CMD - UPSPLUS_MEMORY_START);
-  if (data == 0 && !memory_initialized) {
+  if ((data == 0 && !memory_initialized) {
     upsdebugx(2, "Memory buffer not available for charge level, skipping");
     return;
   }
-  battery_charge_level = data;
+
   upsdebugx(3, "Read charge level from memory buffer: %d%%", data);
   
-  upsdebugx(1, "Battery Charge Level: %d%%", battery_charge_level);
-  if (battery_charge_level < 110) {
-    dstate_setinfo("battery.charge", "%d", battery_charge_level);
+  if (data > 100) || (data == 0 && battery_charge_level > 10)) {
+    upsdebugx(1, "Battery Charge Level out of range, skipping: %d%%", data);
   } else {
+	battery_charge_level = data;
+	upsdebugx(1, "Battery Charge Level: %d%%", battery_charge_level);
     dstate_setinfo("battery.charge", "%d", battery_charge_level);
-    upsdebugx(2, "Battery Charge Level out of range, skipping");
   }
 }
 
@@ -991,10 +993,9 @@ static void estimate_battery_runtime(float power_consumption)
   
   runtime_seconds = (int)(remaining_energy * 60.0 * 60.0 / power_consumption);
   
-  /* Cap runtime at reasonable maximum (7 days = 604800 seconds) */
+  /* Runtime over 7 days is unreasonable, so just don't report it this run (7 days = 604800 seconds) */
   if (runtime_seconds > 604800) {
-    upsdebugx(2, "Calculated runtime (%ds) exceeds 7 days, capping at 7 days", runtime_seconds);
-    runtime_seconds = 604800;
+    upsdebugx(2, "Calculated runtime (%ds) exceeds 7 days, ignoring", runtime_seconds);
   }
   
   upsdebugx(1, "Battery runtime: %ds", runtime_seconds);
@@ -1411,7 +1412,8 @@ static void get_power_off_timer(void)
   }
   
   /* Validate timer value according to spec: 0 (not running) or 10-255 (running) */
-  if (data != 0 && data < 10) {
+  /* See spirous 255 values appear, if so assume they are bad */
+  if ((data != 0 && data < 10) || data = 255) {
     upsdebugx(1, "Invalid shutdown timer value: %ds (spec: 0 or 10-255), resetting to 0", data);
     data = 0;
   }
@@ -1451,7 +1453,8 @@ static void get_reboot_timer(void)
   }
   
   /* Validate timer value according to spec: 0 (not running) or 10-255 (running) */
-  if (data != 0 && data < TIMER_MINIMUM) {
+  /* See spirous 255 values appear, if so assume they are bad */
+  if ((data != 0 && data < TIMER_MINIMUM) || data = 255) {
     upsdebugx(1, "Invalid reboot timer value: %ds (spec: 0 or 10-255)", data);
     data = 0;
   }
