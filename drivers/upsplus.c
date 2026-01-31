@@ -480,8 +480,9 @@ static inline int open_i2c_bus(char *path, uint8_t addr)
 }
 
 /*
- * Read the entire UPSPlus memory range with double-read validation
- * This handles device update cycle corruption by reading twice and comparing
+ * Read the entire UPSPlus memory range.
+ * For firmware < 20, use double-read validation to handle update-cycle corruption.
+ * For firmware >= 20, skip double-read and use a single pass.
  */
 static int read_upsplus_memory(void)
 {
@@ -493,6 +494,36 @@ static int read_upsplus_memory(void)
 
   fd = open_i2c_bus(i2c_bus_path, UPSPLUS_I2C_ADDRESS);
   if (fd < 0) return -1;
+
+  /* Firmware >= 20 does not need double-read validation */
+  if (firmware_version >= 20) {
+    for (attempt = 0; attempt < 3; attempt++) {
+      success_count = 0;
+
+      for (i = 0; i < UPSPLUS_MEMORY_SIZE; i += I2C_SMBUS_BLOCK_MAX) {
+        int chunk = (i + I2C_SMBUS_BLOCK_MAX <= UPSPLUS_MEMORY_SIZE) ? I2C_SMBUS_BLOCK_MAX : UPSPLUS_MEMORY_SIZE - i;
+        if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &upsplus_memory[i]) < 0) {
+          upsdebugx(2, "Failed to read memory chunk at 0x%02X (attempt %d)", base + i, attempt + 1);
+          memset(&upsplus_memory[i], 0, chunk);
+        } else {
+          success_count++;
+        }
+      }
+
+      if (success_count > 0) {
+        memory_initialized = 1;
+        upsdebugx(2, "Memory refreshed (%d chunks)", success_count);
+        close(fd);
+        return 0;
+      }
+
+      upsdebugx(2, "All memory chunks failed on attempt %d", attempt + 1);
+    }
+
+    close(fd);
+    upsdebugx(1, "Memory read failed after 3 attempts - using cached data if available");
+    return memory_initialized ? 0 : -1;
+  }
 
   /* Perform double-read validation to handle device update cycle corruption */
   for (attempt = 0; attempt < 3; attempt++) {
