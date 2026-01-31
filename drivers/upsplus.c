@@ -193,6 +193,8 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_SAMPLE_PERIOD_MAXIMUM       1440
 
 #define POWER_STATUS_CMD                    0x17
+#define POWER_STATUS_FLAG_ON                0x01
+#define POWER_STATUS_FLAG_CALIBRATING       0x02
 
 #define SHUTDOWN_TIMER_CMD                  0x18
 
@@ -213,15 +215,20 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_PARAM_CUSTOM_DISABLE        0x0
 #define BATTERY_PARAM_CUSTOM_ENABLE         0x1
 
-/* 0x2B - 0xEF are reserved, and don't seem to be used.
+/* 0x2C - 0xEF are reserved, and don't seem to be used.
  * When new commands are added in FW updates, they are
  * added as the next available register. So to store
  * custom data, start at highest reserved register
  * and work back.
+ * Low charge threshold lives at 0xEF (FW < 20) or 0x2B (FW >= 20).
  */
- #define RESERVED_BATTERY_LOW_CHARGE_CMD    0xEF
- #define BATTERY_LOW_CHARGE_CONFIGURED      0x80
- #define BATTERY_LOW_CHARGE_MASK            0x7F
+ #define RESERVED_BATTERY_LOW_CHARGE_CMD_LEGACY  0xEF
+ #define BATTERY_LOW_CHARGE_CONFIGURED           0x80
+ #define BATTERY_LOW_CHARGE_MASK                 0x7F
+
+ /* Firmware 2.0 commands */
+ #define BATTERY_LOW_CHARGE_CMD_V20         0x2B
+ #define LOAD_ON_DELAY_CMD_V20              0x2C
 
 #define SERIAL_NUMBER_CMD                   0xF0
 
@@ -252,7 +259,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "1.3"
+#define DRIVER_VERSION                      "2.0"
 
 #define LENGTH_TEMP 256
 
@@ -317,6 +324,13 @@ static uint16_t firmware_version = 0;
 /* Serial number is immutable at runtime; cache after first read */
 static char serial_cached[LENGTH_TEMP];
 static int serial_initialized = 0;
+
+static uint8_t get_battery_low_charge_cmd(void)
+{
+  return (firmware_version >= 20) ?
+         BATTERY_LOW_CHARGE_CMD_V20 :
+         RESERVED_BATTERY_LOW_CHARGE_CMD_LEGACY;
+}
 
 /*
  * These values don't change once set, so do
@@ -810,7 +824,7 @@ static void get_charge_low(void)
 
 static void set_charge_low(int16_t data)
 {
-  uint8_t cmd = RESERVED_BATTERY_LOW_CHARGE_CMD;
+  uint8_t cmd = get_battery_low_charge_cmd();
   
   upsdebugx(3, __func__);
   
@@ -851,16 +865,26 @@ static void get_status(void)
     return;
   }
   
-  if (data == 1) {
+  if (firmware_version >= 20) {
+    if ((data & POWER_STATUS_FLAG_ON) == 0) {
+      upsdebugx(1, "Power status: off");
+      status_set("OFF");
+      /* If we are not running, then set no other Status. */
+      return;
+    }
     upsdebugx(1, "Power status: normal");
-  } else if (data == 0) {
-    upsdebugx(1, "Power status: off");
-    status_set("OFF");
-    /* If we are not running, then set no other Status. */
-    return;
   } else {
-    upsdebugx(1, "Power status: unknown");
-    return;
+    if (data == 1) {
+      upsdebugx(1, "Power status: normal");
+    } else if (data == 0) {
+      upsdebugx(1, "Power status: off");
+      status_set("OFF");
+      /* If we are not running, then set no other Status. */
+      return;
+    } else {
+      upsdebugx(1, "Power status: unknown");
+      return;
+    }
   }
   
   if (power_state == POWER_NOT_CONNECTED) {
@@ -892,7 +916,11 @@ static void get_status(void)
    * because when the UPS circuitry calibrates, it samples
    * the battery which drains it.
    */
-  if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
+  if (firmware_version >= 20 && (data & POWER_STATUS_FLAG_CALIBRATING)) {
+    bad_battery_timer = 0;
+    upsdebugx(1, "Battery Status: Calibrating");
+    status_set("CAL");
+  } else if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
     if (!bad_battery_timer) {
       time(&bad_battery_timer);
     }
@@ -1346,17 +1374,19 @@ static void get_battery_param_custom(void)
 }
 
 /*
- * Read the reserved battery low charge register separately
- * since it's outside our main memory range
+ * Read the reserved battery low charge register separately;
+ * location varies by firmware version.
  */
 static void get_reserved_battery_low_charge(void)
 {
   uint16_t data;
+  uint8_t cmd;
   
   upsdebugx(3, __func__);
   
-  /* This register is outside our main memory range, so always read directly */
-  I2C_READ_WORD(upsfd, RESERVED_BATTERY_LOW_CHARGE_CMD, __func__)
+  /* Always read directly; location varies by firmware version */
+  cmd = get_battery_low_charge_cmd();
+  I2C_READ_WORD(upsfd, cmd, __func__)
   
   if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
     upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
@@ -1452,6 +1482,23 @@ static void get_reboot_timer(void)
   dstate_setinfo("ups.timer.reboot", "%d", data);
 }
 
+static void get_load_on_delay_v20(void)
+{
+  uint8_t data;
+  
+  upsdebugx(3, __func__);
+  
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_byte(LOAD_ON_DELAY_CMD_V20 - UPSPLUS_MEMORY_START);
+  if (data == 0 && !memory_initialized) {
+    upsdebugx(2, "Memory buffer not available for load on delay, skipping");
+    return;
+  }
+  
+  upsdebugx(1, "Load On Delay: %ds", data);
+  dstate_setinfo("ups.delay.start", "%d", data);
+}
+
 static void set_reboot_timer(const short data)
 {
   uint8_t cmd = RESTART_TIMER_CMD;
@@ -1467,6 +1514,21 @@ static void set_reboot_timer(const short data)
   
   upsdebugx(1, "Set Reboot Timer: %ds", data);
   dstate_setinfo("ups.timer.reboot", "%d", data);
+}
+
+static void set_load_on_delay_v20(const short data)
+{
+  uint8_t cmd = LOAD_ON_DELAY_CMD_V20;
+  
+  upsdebugx(3, __func__);
+  
+  I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
+  
+  /* Invalidate live memory buffer since we wrote to a live register */
+  memory_initialized = 0;
+  upsdebugx(2, "Invalidated memory buffer after writing to register 0x%02X", cmd);
+  
+  upsdebugx(1, "Set Load On Delay: %ds", data);
 }
 
 static void get_ups_auto_restart(void)
@@ -1680,10 +1742,29 @@ int upsplus_setvar(const char *key, const char *value)
  */
 int upsplus_instcmd(const char *cmd, const char *reserved)
 {
+  short data;
+  
   upsdebugx(2, "In %s with %s and extra %s.", __func__, cmd, reserved);
   
   if (!strcasecmp(cmd, "load.off.delay")) {
     set_power_off_timer(TIMER_MINIMUM);
+    return STAT_INSTCMD_HANDLED;
+  }
+
+  if (!strcasecmp(cmd, "load.on.delay")) {
+    if (firmware_version < 20) {
+      upsdebugx(1, "load.on.delay not supported on firmware %d", firmware_version);
+      return STAT_INSTCMD_UNKNOWN;
+    }
+    if (reserved == NULL) {
+      upsdebugx(1, "load.on.delay requires a delay value");
+      return STAT_INSTCMD_UNKNOWN;
+    }
+    if (!str_to_short(reserved, &data, 10) || data < 0 || data > 255) {
+      upsdebugx(1, "Unknown value for load.on.delay: %s", reserved);
+      return STAT_INSTCMD_UNKNOWN;
+    }
+    set_load_on_delay_v20(data);
     return STAT_INSTCMD_HANDLED;
   }
   
@@ -1783,6 +1864,9 @@ void upsdrv_initinfo(void)
   
   /* Setup commands */
   dstate_addcmd("load.off.delay");/* Shutdown countdown (10) + default Auto Power up */
+  if (firmware_version >= 20) {
+    dstate_addcmd("load.on.delay");/* Startup countdown (60) */
+  }
   /* For the sake of coherence, shutdown commands will set ups.start.auto to the right value before issuing the command. */
   dstate_addcmd("shutdown.return");/* Shutdown countdown (10) +  Auto Power up ON */
   dstate_addcmd("shutdown.stayoff");/* Shutdown countdown (10) +  Auto Power up OFF */
@@ -1840,6 +1924,9 @@ void upsdrv_updateinfo(void)
   get_battery_sample_period();
   get_power_off_timer();
   get_reboot_timer();
+  if (firmware_version >= 20) {
+    get_load_on_delay_v20();
+  }
   get_ups_auto_restart();
   
   status_init();
