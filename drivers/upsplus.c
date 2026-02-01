@@ -333,9 +333,7 @@ static uint8_t get_battery_low_charge_cmd(void)
 }
 
 /*
- * These values don't change once set, so do
- * some caching. Values are in mV
- * -1 value means that it needs to be loaded from UPS
+ * Store last-read values for calculations. Values are in mV.
  */
 static int16_t battery_full = -1;
 static int16_t battery_low = -1;
@@ -740,19 +738,17 @@ static void get_output_voltage(void)
 
 static void get_battery_full(void)
 {
-  int16_t data = battery_full;
+  int16_t data;
   
   upsdebugx(3, __func__);
   
-  if (battery_full < 0) {
-    /* Read from memory buffer instead of I2C */
-    data = get_memory_word(BATTERY_FULL_CMD - UPSPLUS_MEMORY_START);
-    if (data == 0 && !memory_initialized) {
-      upsdebugx(2, "Memory buffer not available for battery full voltage, skipping");
-      return;
-    }
-    battery_full = data;
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_FULL_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && !memory_initialized) {
+    upsdebugx(2, "Memory buffer not available for battery full voltage, skipping");
+    return;
   }
+  battery_full = data;
   
   upsdebugx(1, "Battery Voltage High: %0.3fV", data / 1000.0);
   dstate_setinfo("battery.voltage.high", "%0.3f", data / 1000.0);
@@ -769,8 +765,6 @@ static void set_battery_full(uint16_t data)
   I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
   I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
 
-  battery_full = -1;
-  
   /* Invalidate live memory buffer since we wrote to a live register */
   memory_initialized = 0;
   upsdebugx(2, "Invalidated memory buffer after writing to register 0x%02X", cmd);
@@ -781,19 +775,17 @@ static void set_battery_full(uint16_t data)
 
 static void get_battery_low(void)
 {
-  int16_t data = battery_low;
+  int16_t data;
   
   upsdebugx(3, __func__);
   
-  if (battery_low < 0) {
-    /* Read from memory buffer instead of I2C */
-    data = get_memory_word(BATTERY_PROTECTION_CMD - UPSPLUS_MEMORY_START);
-    if (data == 0 && !memory_initialized) {
-      upsdebugx(2, "Memory buffer not available for battery low voltage, skipping");
-      return;
-    }
-    battery_low = data;
+  /* Read from memory buffer instead of I2C */
+  data = get_memory_word(BATTERY_PROTECTION_CMD - UPSPLUS_MEMORY_START);
+  if (data == 0 && !memory_initialized) {
+    upsdebugx(2, "Memory buffer not available for battery low voltage, skipping");
+    return;
   }
+  battery_low = data;
   
   upsdebugx(1, "Battery Voltage Low: %0.3fV", data / 1000.0);
   if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
@@ -832,8 +824,6 @@ static void set_battery_low(uint16_t data)
                  BATTERY_PARAM_CUSTOM_ENABLE, __func__)
   I2C_WRITE_BYTE(upsfd, cmd, data & 0xFF, __func__)
   I2C_WRITE_BYTE(upsfd, cmd + 1, (data >> 8) & 0xFF, __func__)
-  
-  battery_low = -1;
   
   /* Invalidate live memory buffer since we wrote to a live register */
   memory_initialized = 0;
@@ -924,7 +914,7 @@ static void get_status(void)
     status_set("OL");
   }
   
-  /* Battery low/full values are cached and don't change frequently */
+  /* Battery low/full values are read from the memory buffer */
   get_battery_low();
   get_battery_full();
 
