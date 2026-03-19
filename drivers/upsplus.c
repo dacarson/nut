@@ -1047,9 +1047,10 @@ static void estimate_battery_runtime(float power_consumption)
   
   upsdebugx(3, __func__);
 
-  get_battery_full();
-  
-  total_battery_capacity = (battery_full / 1000.0) * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
+  /* Use current battery voltage rather than full-charge threshold for a more
+   * accurate estimate of remaining energy as the pack voltage sags under load.
+   */
+  total_battery_capacity = (battery_voltage / 1000.0) * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
   remaining_energy = total_battery_capacity * (float)battery_charge_level / 100.0;
   
   /* Handle edge cases that cause extreme runtime spikes */
@@ -1059,16 +1060,15 @@ static void estimate_battery_runtime(float power_consumption)
   }
   
   runtime_seconds = (int)(remaining_energy * 60.0 * 60.0 / power_consumption);
-  
-  /* Runtime over 7 days is unreasonable, so just don't report it this run (7 days = 604800 seconds) */
+
+  /* Runtime over 7 days is unreasonable, skip reporting for this cycle */
   if (runtime_seconds > 604800) {
     upsdebugx(2, "Calculated runtime (%ds) exceeds 7 days, ignoring", runtime_seconds);
+    return;
   }
   
   upsdebugx(1, "Battery runtime: %ds", runtime_seconds);
   dstate_setinfo("battery.runtime", "%d", runtime_seconds);
-  
-  return ;
 }
 
 static void get_realtime_output_state(void)
