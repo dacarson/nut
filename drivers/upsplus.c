@@ -872,12 +872,9 @@ static void set_charge_low(int16_t data)
 static void get_status(void)
 {
   uint8_t data;
-  char status_buf[ST_MAX_VALUE_LEN];
   time_t now;
   
   upsdebugx(3, __func__);
-  
-  memset(status_buf, 0, ST_MAX_VALUE_LEN);
   
   /* Use critical data that was already read, or fall back to memory buffer */
   if (memory_initialized) {
@@ -928,7 +925,7 @@ static void get_status(void)
   } else if (battery_charge_level < battery_charge_low) {
     upsdebugx(1, "Battery Status: Low");
     status_set("LB");
-  } else if (battery_voltage > (1.2 * battery_full)) {
+  } else if (battery_full > 0 && battery_voltage > (1.2 * battery_full)) {
     upsdebugx(1, "Battery Status: High");
     status_set("HB");
   }
@@ -944,6 +941,12 @@ static void get_status(void)
       bad_battery_timer = 0;
       upsdebugx(1, "Battery Status: Calibrating");
       status_set("CAL");
+    } else if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
+      if (!bad_battery_timer) {
+        time(&bad_battery_timer);
+      }
+    } else {
+      bad_battery_timer = 0;
     }
   } else if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
     if (!bad_battery_timer) {
