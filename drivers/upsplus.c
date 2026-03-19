@@ -383,6 +383,12 @@ static uint16_t battery_charge_level = 0;
  */
 static uint8_t battery_charge_low = DEFAULT_CHARGE_LOW;
 
+/*
+ * Output load as a percentage of MAX_LOAD, updated each poll cycle
+ * by get_realtime_output_state(). Used to detect OVER condition.
+ */
+static float output_load_percent = 0.0;
+
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
   DRIVER_NAME,
@@ -970,7 +976,20 @@ static void get_status(void)
     upsdebugx(1, "Battery Status: Resting");
     dstate_setinfo("battery.charger.status", "%s", "resting");
   }
-  
+
+  if (output_load_percent > 100.0) {
+    upsdebugx(1, "UPS Status: Overloaded (%0.1f%%)", output_load_percent);
+    status_set("OVER");
+  }
+
+  {
+    uint8_t shutdown_timer = get_memory_byte(SHUTDOWN_TIMER_CMD - UPSPLUS_MEMORY_START);
+    if (shutdown_timer >= 10 && shutdown_timer < 255) {
+      upsdebugx(1, "UPS Status: Forced Shutdown (timer %ds)", shutdown_timer);
+      status_set("FSD");
+    }
+  }
+
 }
 
 static void get_battery_temperature(void)
@@ -1096,8 +1115,9 @@ static void get_realtime_output_state(void)
     // Apparent Power and Real Power are the same for this DC UPS
   dstate_setinfo("ups.realpower", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
   dstate_setinfo("ups.power", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
-  upsdebugx(1, "UPS Load: %0.3f%%", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
-  dstate_setinfo("ups.load", "%0.3f", 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD);
+  output_load_percent = 100 * data * OUTPUT_POWER_LSB_MAGIC / MAX_LOAD;
+  upsdebugx(1, "UPS Load: %0.3f%%", output_load_percent);
+  dstate_setinfo("ups.load", "%0.3f", output_load_percent);
   
   // If charging, estimate time based on output power
   if (power_state != POWER_NOT_CONNECTED) {
