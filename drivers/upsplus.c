@@ -714,7 +714,7 @@ static void get_charge_level(void)
 
   upsdebugx(3, "Read charge level from memory buffer: %d%%", data);
   
-  if ((data > 100) || (data == 0 && battery_charge_level > 10)) {
+  if ((data > 100) || (data == 0 && battery_charge_level > battery_charge_low)) {
     upsdebugx(1, "Battery Charge Level out of range, skipping: %d%%", data);
   } else {
 	battery_charge_level = data;
@@ -862,9 +862,14 @@ static void set_charge_low(int16_t data)
   }
   
   battery_charge_low = data;
-  
-  data |= BATTERY_LOW_CHARGE_CONFIGURED;
-  
+
+  /* fw < 20 uses bit 7 as a "configured" flag in the legacy 0xEF register.
+   * fw >= 20 stores the percentage directly in 0x2B — no flag bit needed.
+   */
+  if (firmware_version < 20) {
+    data |= BATTERY_LOW_CHARGE_CONFIGURED;
+  }
+
   I2C_WRITE_BYTE(upsfd, cmd, data, __func__)
 
   upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
@@ -1431,29 +1436,38 @@ static void get_battery_param_custom(void)
 static void get_reserved_battery_low_charge(void)
 {
   uint16_t data;
-  uint8_t cmd;
-  
+
   upsdebugx(3, __func__);
-  
-  /* Always read directly; location varies by firmware version */
-  cmd = get_battery_low_charge_cmd();
-  I2C_READ_WORD(upsfd, cmd, __func__)
-  
-  if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
-    upsdebugx(3, "Found Low Charge Threshold in Reserved Register");
-    if ((data & BATTERY_LOW_CHARGE_MASK) < 100) {
-      upsdebugx(3, "Low Charge Threshold is within range");
-      battery_charge_low = (data & BATTERY_LOW_CHARGE_MASK);
+
+  if (firmware_version >= 20) {
+    /* fw >= 20: dedicated register at 0x2B holds the percentage directly */
+    I2C_READ_WORD(upsfd, BATTERY_LOW_CHARGE_CMD_V20, __func__)
+    if (data <= 100) {
+      battery_charge_low = (uint8_t)data;
+    } else {
+      upsdebugx(2, "Low Charge Threshold out of range (%d%%), using default %d%%",
+                data, DEFAULT_CHARGE_LOW);
+      battery_charge_low = DEFAULT_CHARGE_LOW;
+    }
+  } else {
+    /* fw < 20: read from legacy 0xEF register; use configured value if the
+     * BATTERY_LOW_CHARGE_CONFIGURED flag is set, otherwise default to 10%.
+     */
+    I2C_READ_WORD(upsfd, RESERVED_BATTERY_LOW_CHARGE_CMD_LEGACY, __func__)
+    if (data & BATTERY_LOW_CHARGE_CONFIGURED) {
+      uint8_t threshold = data & BATTERY_LOW_CHARGE_MASK;
+      if (threshold <= 100) {
+        battery_charge_low = threshold;
+      } else {
+        battery_charge_low = DEFAULT_CHARGE_LOW;
+      }
+    } else {
+      battery_charge_low = DEFAULT_CHARGE_LOW;
     }
   }
-  
+
   upsdebugx(1, "Low Charge Threshold: %d%%", battery_charge_low);
-  if (battery_charge_low <= 100) {
-    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
-  } else {
-    dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
-    upsdebugx(2, "Low Charge Threshold out of range, skipping");
-  }
+  dstate_setinfo("battery.charge.low", "%d", battery_charge_low);
 }
 
 static void reset_shutdown_restart_timers(void)
