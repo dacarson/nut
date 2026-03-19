@@ -939,10 +939,12 @@ static void get_status(void)
    * because when the UPS circuitry calibrates, it samples
    * the battery which drains it.
    */
-  if (firmware_version >= 20 && (data & POWER_STATUS_FLAG_CALIBRATING)) {
-    bad_battery_timer = 0;
-    upsdebugx(1, "Battery Status: Calibrating");
-    status_set("CAL");
+  if (firmware_version >= 20) {
+    if (data & POWER_STATUS_FLAG_CALIBRATING) {
+      bad_battery_timer = 0;
+      upsdebugx(1, "Battery Status: Calibrating");
+      status_set("CAL");
+    }
   } else if (battery_current < 0 && power_state != POWER_NOT_CONNECTED) {
     if (!bad_battery_timer) {
       time(&bad_battery_timer);
