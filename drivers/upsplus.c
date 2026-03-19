@@ -495,27 +495,28 @@ static int read_upsplus_memory(void)
 
   /* Firmware >= 20 does not need double-read validation */
   if (firmware_version >= 20) {
+    int total_chunks = (UPSPLUS_MEMORY_SIZE + I2C_SMBUS_BLOCK_MAX - 1) / I2C_SMBUS_BLOCK_MAX;
     for (attempt = 0; attempt < 3; attempt++) {
       success_count = 0;
 
       for (i = 0; i < UPSPLUS_MEMORY_SIZE; i += I2C_SMBUS_BLOCK_MAX) {
         int chunk = (i + I2C_SMBUS_BLOCK_MAX <= UPSPLUS_MEMORY_SIZE) ? I2C_SMBUS_BLOCK_MAX : UPSPLUS_MEMORY_SIZE - i;
-        if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &upsplus_memory[i]) < 0) {
+        if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &temp_buffer[i]) < 0) {
           upsdebugx(2, "Failed to read memory chunk at 0x%02X (attempt %d)", base + i, attempt + 1);
-          memset(&upsplus_memory[i], 0, chunk);
         } else {
           success_count++;
         }
       }
 
-      if (success_count > 0) {
+      if (success_count == total_chunks) {
+        memcpy(upsplus_memory, temp_buffer, UPSPLUS_MEMORY_SIZE);
         memory_initialized = 1;
         upsdebugx(2, "Memory refreshed (%d chunks)", success_count);
         close(fd);
         return 0;
       }
 
-      upsdebugx(2, "All memory chunks failed on attempt %d", attempt + 1);
+      upsdebugx(2, "Incomplete memory read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
     }
 
     close(fd);
@@ -524,6 +525,8 @@ static int read_upsplus_memory(void)
   }
 
   /* Perform double-read validation to handle device update cycle corruption */
+  int total_chunks = (UPSPLUS_MEMORY_SIZE + I2C_SMBUS_BLOCK_MAX - 1) / I2C_SMBUS_BLOCK_MAX;
+  uint8_t second_buffer[UPSPLUS_MEMORY_SIZE];
   for (attempt = 0; attempt < 3; attempt++) {
     success_count = 0;
     
@@ -532,52 +535,51 @@ static int read_upsplus_memory(void)
       int chunk = (i + I2C_SMBUS_BLOCK_MAX <= UPSPLUS_MEMORY_SIZE) ? I2C_SMBUS_BLOCK_MAX : UPSPLUS_MEMORY_SIZE - i;
       if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &temp_buffer[i]) < 0) {
         upsdebugx(2, "Failed to read memory chunk at 0x%02X (attempt %d)", base + i, attempt + 1);
-        memset(&temp_buffer[i], 0, chunk);
       } else {
         success_count++;
       }
     }
-    
-    if (success_count == 0) {
-      upsdebugx(2, "All memory chunks failed on attempt %d", attempt + 1);
+
+    if (success_count < total_chunks) {
+      upsdebugx(2, "Incomplete first read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
       continue;
     }
     
     /* Small delay to ensure device has moved past any update cycle */
     usleep(10000); /* 10ms delay */
-    
-    /* Second read into main buffer */
+
+    /* Second read into separate buffer */
     success_count = 0;
     for (i = 0; i < UPSPLUS_MEMORY_SIZE; i += I2C_SMBUS_BLOCK_MAX) {
       int chunk = (i + I2C_SMBUS_BLOCK_MAX <= UPSPLUS_MEMORY_SIZE) ? I2C_SMBUS_BLOCK_MAX : UPSPLUS_MEMORY_SIZE - i;
-      if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &upsplus_memory[i]) < 0) {
+      if (i2c_smbus_read_i2c_block_data(fd, base + i, chunk, &second_buffer[i]) < 0) {
         upsdebugx(2, "Failed to read memory chunk at 0x%02X on validation read", base + i);
-        memset(&upsplus_memory[i], 0, chunk);
       } else {
         success_count++;
       }
     }
-    
-    if (success_count == 0) {
-      upsdebugx(2, "All memory chunks failed on validation read (attempt %d)", attempt + 1);
+
+    if (success_count < total_chunks) {
+      upsdebugx(2, "Incomplete second read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
       continue;
     }
     
     /* Compare the two reads - if they match, we have good data */
-    if (memcmp(temp_buffer, upsplus_memory, UPSPLUS_MEMORY_SIZE) == 0) {
+    if (memcmp(temp_buffer, second_buffer, UPSPLUS_MEMORY_SIZE) == 0) {
       validation_passes = 1;
       upsdebugx(2, "Memory validation passed on attempt %d", attempt + 1);
       break;
     } else {
       upsdebugx(2, "Memory validation failed on attempt %d (data differs between reads)", attempt + 1);
-      /* Copy the second read back to temp buffer for next comparison */
-      memcpy(temp_buffer, upsplus_memory, UPSPLUS_MEMORY_SIZE);
+      /* Use second read as first read for next attempt */
+      memcpy(temp_buffer, second_buffer, UPSPLUS_MEMORY_SIZE);
     }
   }
 
   close(fd);
 
   if (validation_passes) {
+    memcpy(upsplus_memory, temp_buffer, UPSPLUS_MEMORY_SIZE);
     memory_initialized = 1;
     upsdebugx(2, "Memory refreshed and validated (%d chunks)", success_count);
     return 0;
