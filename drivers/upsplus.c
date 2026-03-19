@@ -923,24 +923,14 @@ static void get_status(void)
   get_battery_low();
   get_battery_full();
 
-  /* Check for 60secs of discharging on power */
-  time(&now);
-  if (battery_voltage == 0 || (bad_battery_timer && now - bad_battery_timer > 60)) {
-    upsdebugx(1, "Battery Status: Replace");
-    status_set("RB");
-  } else if (battery_charge_level < battery_charge_low) {
-    upsdebugx(1, "Battery Status: Low");
-    status_set("LB");
-  } else if (battery_full > 0 && battery_voltage > (1.2 * battery_full)) {
-    upsdebugx(1, "Battery Status: High");
-    status_set("HB");
-  }
-  
-    /* If we are discharging while power is connected for
-   * 1 minute, then batteries are bad.
-   * Need to check for multiple times discharging
-   * because when the UPS circuitry calibrates, it samples
-   * the battery which drains it.
+  /* Update bad_battery_timer and CAL before RB check so that a calibration
+   * event resets the timer before the 60-second expiry is evaluated.
+   * Without this ordering, CAL and RB would both fire in the same poll cycle
+   * when calibration starts exactly as the timer expires.
+   *
+   * If we are discharging while power is connected for 1 minute, then
+   * batteries are bad. Need to check for multiple times discharging because
+   * when the UPS circuitry calibrates, it samples the battery which drains it.
    */
   if (firmware_version >= 20) {
     if (data & POWER_STATUS_FLAG_CALIBRATING) {
@@ -962,6 +952,19 @@ static void get_status(void)
     status_set("CAL");
   } else {
     bad_battery_timer = 0;
+  }
+
+  /* Check for 60secs of discharging on power */
+  time(&now);
+  if (battery_voltage == 0 || (bad_battery_timer && now - bad_battery_timer > 60)) {
+    upsdebugx(1, "Battery Status: Replace");
+    status_set("RB");
+  } else if (battery_charge_level < battery_charge_low) {
+    upsdebugx(1, "Battery Status: Low");
+    status_set("LB");
+  } else if (battery_full > 0 && battery_voltage > (1.2 * battery_full)) {
+    upsdebugx(1, "Battery Status: High");
+    status_set("HB");
   }
   
   if (battery_current > CHARGE_CURRENT_THRESHOLD) {
