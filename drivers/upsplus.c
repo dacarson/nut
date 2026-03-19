@@ -480,7 +480,14 @@ static inline int open_i2c_bus(char *path, uint8_t addr)
   if (ioctl(file, I2C_SLAVE, addr) < 0) {
     fatal_with_errno(EXIT_FAILURE, "Failed to acquire the i2c bus and/or talk to the UPS");
   }
-  
+
+  /* Limit per-transaction wait to 500ms (value is in units of 10ms).
+   * Without this, a hung I2C bus can stall each transfer for 15-20 seconds,
+   * causing the driver to miss its dstate_dataok() deadline and NUT to mark
+   * all data stale.
+   */
+  ioctl(file, I2C_TIMEOUT, 50);
+
   return file;
 }
 
