@@ -259,7 +259,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "2.0"
+#define DRIVER_VERSION                      "2.1"
 
 #define LENGTH_TEMP 256
 
@@ -370,6 +370,7 @@ static uint8_t get_memory_byte(uint8_t offset);
  * level.
  */
 static time_t bad_battery_timer = 0;
+static int bad_battery_count = 0; /* consecutive polls with timer expired */
 
 /*
  * Smooth out i2c read errors by holding the most recent
@@ -959,10 +960,21 @@ static void get_status(void)
     bad_battery_timer = 0;
   }
 
-  /* Check for 60secs of discharging on power */
+  /* Require 2 consecutive polls with the timer expired before setting RB.
+   * A single poll above the threshold is suppressed — this covers the case
+   * where the UPS samples the battery just before the hardware CAL bit
+   * appears, causing one poll of spurious discharge. When CAL fires it
+   * resets bad_battery_timer to 0, which in turn resets bad_battery_count,
+   * so the counter never reaches 2 unless there is a genuine fault.
+   */
   time(&now);
-  if (battery_voltage == 0 || (bad_battery_timer && now - bad_battery_timer > 60)) {
-    upsdebugx(1, "Battery Status: Replace");
+  if (bad_battery_timer && now - bad_battery_timer > 60) {
+    bad_battery_count++;
+  } else {
+    bad_battery_count = 0;
+  }
+  if (battery_voltage == 0 || bad_battery_count >= 2) {
+    upsdebugx(1, "Battery Status: Replace (count=%d)", bad_battery_count);
     status_set("RB");
   } else if (battery_charge_level < battery_charge_low) {
     upsdebugx(1, "Battery Status: Low");
@@ -1030,8 +1042,8 @@ static void get_battery_voltage(void)
   
   /* Read from memory buffer instead of I2C */
   data = get_memory_word(BATTERY_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
-  if (data == 0 && !memory_initialized) {
-    upsdebugx(2, "Memory buffer not available for battery voltage, skipping");
+  if (data == 0) {
+    upsdebugx(2, "Battery voltage read as zero, retaining last value (%dmV)", battery_voltage);
     return;
   }
   battery_voltage = data;
