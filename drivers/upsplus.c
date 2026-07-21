@@ -259,7 +259,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "2.1"
+#define DRIVER_VERSION                      "2.2"
 
 #define LENGTH_TEMP 256
 
@@ -491,6 +491,18 @@ static inline int open_i2c_bus(char *path, uint8_t addr)
   return file;
 }
 
+/* Backoff between retry attempts in read_upsplus_memory(). The STM32 briefly (<=2ms) drops
+ * its own slave-address recognition while it grabs the I2C bus as master to poll the INA219
+ * current sensors; a chunk read that lands in that window fails with EIO/EREMOTEIO. Without a
+ * delay here, a failed attempt was immediately retried (all chunks, up to 3 times) with
+ * essentially no gap -- confirmed via strace as bursts of ~24 back-to-back failing ioctls in
+ * under 25ms. That retry storm was largely self-inflicted: it kept the bus busy long past the
+ * originating collision, made further collisions (with our own or its own retries) more
+ * likely, and was directly visible in the STM32's internal diagnostics as chronic bus activity
+ * far more frequent than this driver's actual ~2s poll cadence should produce. A short pause
+ * gives any in-flight STM32 master-window time to finish before retrying. */
+#define MEMORY_READ_RETRY_DELAY_US 20000 /* 20ms */
+
 /*
  * Read the entire UPSPlus memory range.
  * For firmware < 20, use double-read validation to handle update-cycle corruption.
@@ -531,6 +543,9 @@ static int read_upsplus_memory(void)
       }
 
       upsdebugx(2, "Incomplete memory read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
+      if (attempt < 2) {
+        usleep(MEMORY_READ_RETRY_DELAY_US);
+      }
     }
 
     close(fd);
@@ -556,6 +571,9 @@ static int read_upsplus_memory(void)
 
     if (success_count < total_chunks) {
       upsdebugx(2, "Incomplete first read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
+      if (attempt < 2) {
+        usleep(MEMORY_READ_RETRY_DELAY_US);
+      }
       continue;
     }
     
@@ -575,6 +593,9 @@ static int read_upsplus_memory(void)
 
     if (success_count < total_chunks) {
       upsdebugx(2, "Incomplete second read on attempt %d (%d/%d chunks)", attempt + 1, success_count, total_chunks);
+      if (attempt < 2) {
+        usleep(MEMORY_READ_RETRY_DELAY_US);
+      }
       continue;
     }
     
@@ -587,6 +608,9 @@ static int read_upsplus_memory(void)
       upsdebugx(2, "Memory validation failed on attempt %d (data differs between reads)", attempt + 1);
       /* Use second read as first read for next attempt */
       memcpy(temp_buffer, second_buffer, UPSPLUS_MEMORY_SIZE);
+      if (attempt < 2) {
+        usleep(MEMORY_READ_RETRY_DELAY_US);
+      }
     }
   }
 
@@ -739,8 +763,8 @@ static void get_output_voltage(void)
   
   /* Read from memory buffer instead of I2C */
   data = get_memory_word(OUTPUT_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
-  if (data == 0 && !memory_initialized) {
-    upsdebugx(2, "Memory buffer not available for output voltage, skipping");
+  if (data == 0) {
+    upsdebugx(2, "Output voltage read as zero, skipping");
     return;
   }
   
@@ -1131,7 +1155,9 @@ static void get_realtime_output_state(void)
   data >>= 3;    /* Bits 3-15 */
   data *= 4;    /* LSB 4mV */
   upsdebugx(1, "INA219 Output Voltage: %0.3fV", data / 1000.0);
-  if (data > OUTPUT_VOLTAGE_MINIMUM || data < OUTPUT_VOLTAGE_MAXIMUM) {
+  if (data == 0) {
+    upsdebugx(2, "INA219 output voltage read as zero, skipping");
+  } else if (data > OUTPUT_VOLTAGE_MINIMUM || data < OUTPUT_VOLTAGE_MAXIMUM) {
     dstate_setinfo("output.voltage", "%0.3f", data / 1000.0);
   } else {
     upsdebugx(2, "Output voltage out of range, skipping");
