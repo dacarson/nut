@@ -440,11 +440,16 @@ upsdrv_info_t upsdrv_info = {
  * For some reason the INA219 registers seem to be in reverse order
  * So swap MSB/LSB for INA219 operations.
  */
+/* Unlike I2C_READ_WORD/I2C_WRITE_WORD (used with the driver's long-lived upsfd, which must
+ * never be closed here), these _INA219 macros are only ever used with a per-call fd
+ * (ina219_fd) opened just above in the caller -- close it before the early return so an I2C
+ * failure can't leak the descriptor. */
 #define I2C_READ_WORD_INA219(fd, cmd, label) \
 { \
   __s32 sData; \
   if ((sData = i2c_smbus_read_word_data(fd, cmd)) < 0 ) { \
     upsdebugx(2, "Failure reading the i2c bus [%s]", label); \
+    close(fd); \
     return; \
   } ; \
   data = (uint16_t)( (sData >> 8) | (sData << 8) ); \
@@ -454,6 +459,7 @@ upsdrv_info_t upsdrv_info = {
 { \
   if ( i2c_smbus_write_word_data(fd, cmd, (__u16)((value >> 8) | (value << 8))) < 0 ) { \
     upsdebugx(2, "Failure writing to the i2c bus [%s]", label); \
+    close(fd); \
     return; \
   } ; \
 }
@@ -1122,33 +1128,34 @@ static void estimate_battery_runtime(float power_consumption)
 static void get_realtime_output_state(void)
 {
   uint16_t data;
-  
+  int ina219_fd;
+
   upsdebugx(3, __func__);
 
-  extrafd = open_i2c_bus(i2c_bus_path, INA219_OUTPUT_I2C_ADDRESS);
+  ina219_fd = open_i2c_bus(i2c_bus_path, INA219_OUTPUT_I2C_ADDRESS);
   
   /* Configure/Calibrate INA219 only if needed */
   {
-    __s32 cfg = i2c_smbus_read_word_data(extrafd, INA219_CONFIGURATION_CMD);
+    __s32 cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(cfg, INA219_CONFIGURATION_VALUE)) {
-      I2C_WRITE_WORD_INA219(extrafd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
+      I2C_WRITE_WORD_INA219(ina219_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
     }
-    __s32 cal = i2c_smbus_read_word_data(extrafd, INA219_CALIBRATION_CMD);
+    __s32 cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(cal, INA219_CALIBRATION_VALUE_MAGIC)) {
-      I2C_WRITE_WORD_INA219(extrafd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
+      I2C_WRITE_WORD_INA219(ina219_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
     }
   }
   
   /* Read values */
   int attempt = 3;
   do {
-    I2C_READ_WORD_INA219(extrafd, INA219_BUSVOLTAGE_CMD, __func__)
+    I2C_READ_WORD_INA219(ina219_fd, INA219_BUSVOLTAGE_CMD, __func__)
   } while (!(data & INA219_CONVERSION_READY) && attempt--);
   
   if (attempt == 0) {
     upsdebugx(1, "INA219 Output Voltage value not ready");
-    close(extrafd);
-    extrafd = 0;
+    close(ina219_fd);
+    ina219_fd = 0;
     return;
   }
   
@@ -1163,7 +1170,7 @@ static void get_realtime_output_state(void)
     upsdebugx(2, "Output voltage out of range, skipping");
   }
   
-  I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
+  I2C_READ_WORD_INA219(ina219_fd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Output Power: %0.3fW", data * OUTPUT_POWER_LSB_MAGIC);
     // Apparent Power and Real Power are the same for this DC UPS
   dstate_setinfo("ups.realpower", "%0.3f", data * OUTPUT_POWER_LSB_MAGIC);
@@ -1177,45 +1184,46 @@ static void get_realtime_output_state(void)
     estimate_battery_runtime(data * OUTPUT_POWER_LSB_MAGIC);
   }
   
-  I2C_READ_WORD_INA219(extrafd, INA219_CURRENT_CMD, __func__)
+  I2C_READ_WORD_INA219(ina219_fd, INA219_CURRENT_CMD, __func__)
   /* Current is a signed 16bit number */
   upsdebugx(1, "INA219 Output Current: %0.3fA", (int16_t) data * OUTPUT_CURRENT_LSB_MAGIC);
   dstate_setinfo("output.current", "%0.3f", (int16_t) data * OUTPUT_CURRENT_LSB_MAGIC);
   
-  close(extrafd);
-  extrafd = 0;
+  close(ina219_fd);
+  ina219_fd = 0;
 }
 
 static void get_realtime_battery_state(void)
 {
   int16_t data = 0;
-  
+  int ina219_fd;
+
   upsdebugx(3, __func__);
 
-  extrafd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
+  ina219_fd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
   
   /* Configure/Calibrate INA219 only if needed */
   {
-    __s32 cfg = i2c_smbus_read_word_data(extrafd, INA219_CONFIGURATION_CMD);
+    __s32 cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(cfg, INA219_CONFIGURATION_VALUE)) {
-      I2C_WRITE_WORD_INA219(extrafd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
+      I2C_WRITE_WORD_INA219(ina219_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
     }
-    __s32 cal = i2c_smbus_read_word_data(extrafd, INA219_CALIBRATION_CMD);
+    __s32 cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(cal, INA219_CALIBRATION_VALUE_MAGIC)) {
-      I2C_WRITE_WORD_INA219(extrafd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
+      I2C_WRITE_WORD_INA219(ina219_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
     }
   }
   
   /* Read INA219 values */
   int attempt = 3;
   do {
-    I2C_READ_WORD_INA219(extrafd, INA219_BUSVOLTAGE_CMD, __func__)
+    I2C_READ_WORD_INA219(ina219_fd, INA219_BUSVOLTAGE_CMD, __func__)
   } while (!(data & INA219_CONVERSION_READY) && attempt--);
   
   if (attempt == 0) {
     upsdebugx(1, "INA219 Battery Voltage value not ready");
-    close(extrafd);
-    extrafd = 0;
+    close(ina219_fd);
+    ina219_fd = 0;
     return;
   }
   
@@ -1229,7 +1237,7 @@ static void get_realtime_battery_state(void)
     upsdebugx(2, "INA219 Battery Voltage out of range, skipping");
   }
   
-  I2C_READ_WORD_INA219(extrafd, INA219_POWER_CMD, __func__)
+  I2C_READ_WORD_INA219(ina219_fd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Battery Power: %0.3fW", data * BATTERY_POWER_LSB_MAGIC);
   /* dstate_setinfo( "battery.power", "%0.3f", data * BATTERY_POWER_LSB_MAGIC ); */
   
@@ -1238,14 +1246,14 @@ static void get_realtime_battery_state(void)
     estimate_battery_runtime(data * BATTERY_POWER_LSB_MAGIC);
   }
   
-  I2C_READ_WORD_INA219(extrafd, INA219_CURRENT_CMD, __func__)
+  I2C_READ_WORD_INA219(ina219_fd, INA219_CURRENT_CMD, __func__)
   /* Current is a signed 16bit number */
   upsdebugx(1, "INA219 Battery Current: %0.3fA", (int16_t) data * BATTERY_CURRENT_LSB_MAGIC);
   dstate_setinfo("battery.current", "%0.3f", (int16_t) data * BATTERY_CURRENT_LSB_MAGIC);
   battery_current = (int16_t) data * BATTERY_CURRENT_LSB_MAGIC;
   
-  close(extrafd);
-  extrafd = 0;
+  close(ina219_fd);
+  ina219_fd = 0;
 }
 
 static void get_firmware_version(void)
