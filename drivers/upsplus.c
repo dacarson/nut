@@ -23,11 +23,16 @@
  * - Registers 0x01–0x0C are sample-timed by the UPS MCU and refresh only at the configured Battery Sample Period.
  * - Registers 0x0D–0x2A are treated as live (RW) and should be read frequently.
  * - We bulk-read two memory blocks: sampled (0x01–0x0C) at most once per sample period, and live (0x0D–0x2A) on every update.
- * - INA219 sensors on output/battery rails provide additional real-time readings (current, power, bus voltage).
+ * - For firmware < 29, this driver talks directly to the two INA219 sensors on the output/battery
+ *   rails for real-time readings (current, power, bus voltage).
+ * - For firmware >= 29, the UPS MCU itself reads the INA219 chips and publishes calibrated current
+ *   (registers 0x2E–0x32, part of the same bulk memory read) so this driver no longer touches the
+ *   INA219 chips directly; power is derived here as voltage * current.
   */
 
 #include "main.h"
 
+#include <math.h>
 #include <sys/ioctl.h>
 #include "nut_stdint.h"
 
@@ -259,7 +264,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "2.2"
+#define DRIVER_VERSION                      "2.3"
 
 #define LENGTH_TEMP 256
 
@@ -298,6 +303,20 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define OUTPUT_POWER_LSB_MAGIC               0.003364
 #define BATTERY_CURRENT_LSB_MAGIC            0.0002439
 #define BATTERY_POWER_LSB_MAGIC              0.004878
+
+/*
+ * Firmware >= 29 reads the INA219 chips itself and publishes the calibrated
+ * current (mA, signed, 1 mA/LSB) at these registers, which fall within the
+ * bulk 0x01-0xFB memory read, so no direct INA219 i2c access is needed.
+ * There is no dedicated power register; power is derived here as V * I using
+ * the sample-timed output/battery voltage already in the memory buffer.
+ */
+#define FIRMWARE_VERSION_INA219_IN_FW        29
+#define OUTPUT_CURRENT_CMD_V29               0x2E
+#define BATTERY_CURRENT_CMD_V29              0x30
+#define CURRENT_VALID_FLAGS_CMD_V29          0x32
+#define OUTPUT_CURRENT_VALID_FLAG            0x01
+#define BATTERY_CURRENT_VALID_FLAG           0x02
 
 static char *default_i2c_bus_path = "/dev/i2c-1";
 static char *i2c_bus_path;
@@ -648,7 +667,17 @@ static int read_critical_data(void)
   if (now - last_critical_update < critical_update_interval) {
     return 0;
   }
-  
+
+  if (firmware_version >= FIRMWARE_VERSION_INA219_IN_FW) {
+    /* Firmware reads the INA219 chips itself and publishes current via the
+     * bulk memory buffer (refreshed every upsdrv_updateinfo() call), and
+     * output voltage is already read from memory by get_output_voltage().
+     * No direct INA219 i2c access needed here.
+     */
+    last_critical_update = now;
+    return 0;
+  }
+
   upsdebugx(2, "Reading critical real-time data: prioritizing INA219; minimal MCU reads");
   
   /* Real-time: battery current from INA219 on battery rail */
@@ -1132,6 +1161,35 @@ static void get_realtime_output_state(void)
 
   upsdebugx(3, __func__);
 
+  if (firmware_version >= FIRMWARE_VERSION_INA219_IN_FW) {
+    uint8_t valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
+    if (!(valid_flags & OUTPUT_CURRENT_VALID_FLAG)) {
+      upsdebugx(2, "Output current not valid (stale), skipping");
+      return;
+    }
+
+    int16_t current_mA = (int16_t) get_memory_word(OUTPUT_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
+    uint16_t voltage_mV = get_memory_word(OUTPUT_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
+    float current_A = current_mA / 1000.0;
+    float power_W = fabs((voltage_mV / 1000.0) * current_A);
+
+    upsdebugx(1, "Output Current: %0.3fA", current_A);
+    dstate_setinfo("output.current", "%0.3f", current_A);
+
+    upsdebugx(1, "Output Power: %0.3fW", power_W);
+    /* Apparent Power and Real Power are the same for this DC UPS */
+    dstate_setinfo("ups.realpower", "%0.3f", power_W);
+    dstate_setinfo("ups.power", "%0.3f", power_W);
+    output_load_percent = 100 * power_W / MAX_LOAD;
+    upsdebugx(1, "UPS Load: %0.3f%%", output_load_percent);
+    dstate_setinfo("ups.load", "%0.3f", output_load_percent);
+
+    if (power_state != POWER_NOT_CONNECTED) {
+      estimate_battery_runtime(power_W);
+    }
+    return;
+  }
+
   ina219_fd = open_i2c_bus(i2c_bus_path, INA219_OUTPUT_I2C_ADDRESS);
   
   /* Configure/Calibrate INA219 only if needed */
@@ -1199,6 +1257,27 @@ static void get_realtime_battery_state(void)
   int ina219_fd;
 
   upsdebugx(3, __func__);
+
+  if (firmware_version >= FIRMWARE_VERSION_INA219_IN_FW) {
+    uint8_t valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
+    if (!(valid_flags & BATTERY_CURRENT_VALID_FLAG)) {
+      upsdebugx(2, "Battery current not valid (stale), skipping");
+      return;
+    }
+
+    int16_t current_mA = (int16_t) get_memory_word(BATTERY_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
+    battery_current = current_mA / 1000.0;
+
+    upsdebugx(1, "Battery Current: %0.3fA", battery_current);
+    dstate_setinfo("battery.current", "%0.3f", battery_current);
+
+    /* If discharging, estimate time based on battery power */
+    if (power_state == POWER_NOT_CONNECTED) {
+      float power_W = fabs((battery_voltage / 1000.0) * battery_current);
+      estimate_battery_runtime(power_W);
+    }
+    return;
+  }
 
   ina219_fd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
   
@@ -2070,7 +2149,9 @@ void upsdrv_help(void)
   printf("\n");
   printf("OPTIMIZATION:\n");
   printf("Unified bulk caching: all regs 0x01–0xFB are bulk-read with double-read validation to handle device update cycle corruption.\n");
-  printf("All MCU values are served from validated cache; INA219 is polled for real-time electrical readings.\n");
+  printf("All MCU values are served from validated cache. On firmware < 29 the INA219 current/power\n");
+  printf("sensors are polled directly for real-time electrical readings; firmware >= 29 publishes\n");
+  printf("calibrated current via its own registers, so this driver no longer talks to the INA219 chips.\n");
   printf("This minimizes I2C chatter while ensuring data integrity through validation.\n");
   printf("Tune with: criticalinterval (seconds).\n");
   printf("\n");
