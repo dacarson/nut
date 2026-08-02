@@ -20,13 +20,13 @@
  
  /*
  * Sampling model:
- * - Registers 0x01–0x0C are sample-timed by the UPS MCU and refresh only at the configured Battery Sample Period.
- * - Registers 0x0D–0x2A are treated as live (RW) and should be read frequently.
- * - We bulk-read two memory blocks: sampled (0x01–0x0C) at most once per sample period, and live (0x0D–0x2A) on every update.
+ * - Registers 0x01-0x0C are sample-timed by the UPS MCU and refresh only at the configured Battery Sample Period.
+ * - Registers 0x0D-0x2A are treated as live (RW) and should be read frequently.
+ * - We bulk-read two memory blocks: sampled (0x01-0x0C) at most once per sample period, and live (0x0D-0x2A) on every update.
  * - For firmware < 29, this driver talks directly to the two INA219 sensors on the output/battery
  *   rails for real-time readings (current, power, bus voltage).
  * - For firmware >= 29, the UPS MCU itself reads the INA219 chips and publishes calibrated current
- *   (registers 0x2E–0x32, part of the same bulk memory read) so this driver no longer touches the
+ *   (registers 0x2E-0x32, part of the same bulk memory read) so this driver no longer touches the
  *   INA219 chips directly; power is derived here as voltage * current.
   */
 
@@ -327,7 +327,7 @@ static char *i2c_bus_path;
 
 /*
  * Bulk memory buffer for efficient I2C reading with double-read validation
- * All registers (0x01–0xFB) are updated frequently, so we read everything
+ * All registers (0x01-0xFB) are updated frequently, so we read everything
  * and validate with double-read to handle device update cycle corruption
  */
 static uint8_t upsplus_memory[UPSPLUS_MEMORY_SIZE];
@@ -931,7 +931,7 @@ static void set_charge_low(int16_t data)
   battery_charge_low = data;
 
   /* fw < 20 uses bit 7 as a "configured" flag in the legacy 0xEF register.
-   * fw >= 20 stores the percentage directly in 0x2B — no flag bit needed.
+   * fw >= 20 stores the percentage directly in 0x2B - no flag bit needed.
    */
   if (firmware_version < 20) {
     data |= BATTERY_LOW_CHARGE_CONFIGURED;
@@ -1027,7 +1027,7 @@ static void get_status(void)
   }
 
   /* Require 2 consecutive polls with the timer expired before setting RB.
-   * A single poll above the threshold is suppressed — this covers the case
+   * A single poll above the threshold is suppressed - this covers the case
    * where the UPS samples the battery just before the hardware CAL bit
    * appears, causing one poll of spurious discharge. When CAL fires it
    * resets bad_battery_timer to 0, which in turn resets bad_battery_count,
@@ -1091,7 +1091,7 @@ static void get_battery_temperature(void)
     return;
   }
   
-  upsdebugx(1, "Battery Temperature: %d°C", data);
+  upsdebugx(1, "Battery Temperature: %dC", data);
   if (data >=  BATTERY_TEMPERATURE_MINIMUM &&
       data <= BATTERY_TEMPERATURE_MAXIMUM) {
     dstate_setinfo("battery.temperature", "%d", data);
@@ -2148,7 +2148,7 @@ void upsdrv_help(void)
   printf("The /dev/i2c-1 device needs to be world RW permissions, aka 'sudo chmod a+rw /dev/i2c-1'.\n");
   printf("\n");
   printf("OPTIMIZATION:\n");
-  printf("Unified bulk caching: all regs 0x01–0xFB are bulk-read with double-read validation to handle device update cycle corruption.\n");
+  printf("Unified bulk caching: all regs 0x01-0xFB are bulk-read with double-read validation to handle device update cycle corruption.\n");
   printf("All MCU values are served from validated cache. On firmware < 29 the INA219 current/power\n");
   printf("sensors are polled directly for real-time electrical readings; firmware >= 29 publishes\n");
   printf("calibrated current via its own registers, so this driver no longer talks to the INA219 chips.\n");
