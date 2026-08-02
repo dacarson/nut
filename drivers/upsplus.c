@@ -486,11 +486,12 @@ upsdrv_info_t upsdrv_info = {
 /* Helper: check if a 16-bit register matches desired value, tolerant to byte order */
 static inline int reg16_matches(__s32 readv, uint16_t desired)
 {
+  uint16_t v, vs;
   if (readv < 0) return 0; /* read failure means not matching */
-  uint16_t v = (uint16_t)readv;
+  v = (uint16_t)readv;
   if (v == desired) return 1;
   /* Check byteswapped too (INA219 quirk vs host order) */
-  uint16_t vs = (uint16_t)((v >> 8) | (v << 8));
+  vs = (uint16_t)((v >> 8) | (v << 8));
   return (vs == desired);
 }
 
@@ -579,6 +580,7 @@ static int read_upsplus_memory(void)
   }
 
   /* Perform double-read validation to handle device update cycle corruption */
+  {
   int total_chunks = (UPSPLUS_MEMORY_SIZE + I2C_SMBUS_BLOCK_MAX - 1) / I2C_SMBUS_BLOCK_MAX;
   uint8_t second_buffer[UPSPLUS_MEMORY_SIZE];
   for (attempt = 0; attempt < 3; attempt++) {
@@ -638,6 +640,7 @@ static int read_upsplus_memory(void)
       }
     }
   }
+  }
 
   close(fd);
 
@@ -659,11 +662,11 @@ static int read_upsplus_memory(void)
 static int read_critical_data(void)
 {
   time_t now;
-  
-  time(&now);
-  
-  /* Only update if enough time has passed since last critical update */
   static time_t last_critical_update = 0;
+
+  time(&now);
+
+  /* Only update if enough time has passed since last critical update */
   if (now - last_critical_update < critical_update_interval) {
     return 0;
   }
@@ -679,19 +682,22 @@ static int read_critical_data(void)
   }
 
   upsdebugx(2, "Reading critical real-time data: prioritizing INA219; minimal MCU reads");
-  
+
   /* Real-time: battery current from INA219 on battery rail */
+  {
   int battery_fd = open_i2c_bus(i2c_bus_path, INA219_BATTERY_I2C_ADDRESS);
   if (battery_fd >= 0) {
-    __s32 cfg = i2c_smbus_read_word_data(battery_fd, INA219_CONFIGURATION_CMD);
+    __s32 cfg, cal;
+    int16_t current_data;
+    cfg = i2c_smbus_read_word_data(battery_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(cfg, INA219_CONFIGURATION_VALUE)) {
       i2c_smbus_write_word_data(battery_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE);
     }
-    __s32 cal = i2c_smbus_read_word_data(battery_fd, INA219_CALIBRATION_CMD);
+    cal = i2c_smbus_read_word_data(battery_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(cal, INA219_CALIBRATION_VALUE_MAGIC)) {
       i2c_smbus_write_word_data(battery_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC);
     }
-    int16_t current_data = i2c_smbus_read_word_data(battery_fd, INA219_CURRENT_CMD);
+    current_data = i2c_smbus_read_word_data(battery_fd, INA219_CURRENT_CMD);
     if (current_data >= 0) {
       current_data = (current_data >> 8) | (current_data << 8);
       battery_current = (int16_t)current_data * BATTERY_CURRENT_LSB_MAGIC;
@@ -699,19 +705,22 @@ static int read_critical_data(void)
     }
     close(battery_fd);
   }
-  
+  }
+
   /* Real-time: output bus voltage via INA219 */
+  {
   int output_fd = open_i2c_bus(i2c_bus_path, INA219_OUTPUT_I2C_ADDRESS);
   if (output_fd >= 0) {
-    __s32 ocfg = i2c_smbus_read_word_data(output_fd, INA219_CONFIGURATION_CMD);
+    __s32 ocfg, ocal, v;
+    ocfg = i2c_smbus_read_word_data(output_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(ocfg, INA219_CONFIGURATION_VALUE)) {
       i2c_smbus_write_word_data(output_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE);
     }
-    __s32 ocal = i2c_smbus_read_word_data(output_fd, INA219_CALIBRATION_CMD);
+    ocal = i2c_smbus_read_word_data(output_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(ocal, INA219_CALIBRATION_VALUE_MAGIC)) {
       i2c_smbus_write_word_data(output_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC);
     }
-    __s32 v = i2c_smbus_read_word_data(output_fd, INA219_BUSVOLTAGE_CMD);
+    v = i2c_smbus_read_word_data(output_fd, INA219_BUSVOLTAGE_CMD);
     if (v >= 0) {
       uint16_t w = (uint16_t)((v >> 8) | (v << 8));
       w >>= 3; /* Bits 3-15 */
@@ -720,7 +729,8 @@ static int read_critical_data(void)
     }
     close(output_fd);
   }
-  
+  }
+
   last_critical_update = now;
   upsdebugx(2, "Critical data updated successfully");
   
@@ -1158,20 +1168,26 @@ static void get_realtime_output_state(void)
 {
   uint16_t data;
   int ina219_fd;
+  int attempt;
 
   upsdebugx(3, __func__);
 
   if (firmware_version >= FIRMWARE_VERSION_INA219_IN_FW) {
-    uint8_t valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
+    uint8_t valid_flags;
+    int16_t current_mA;
+    uint16_t voltage_mV;
+    float current_A, power_W;
+
+    valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
     if (!(valid_flags & OUTPUT_CURRENT_VALID_FLAG)) {
       upsdebugx(2, "Output current not valid (stale), skipping");
       return;
     }
 
-    int16_t current_mA = (int16_t) get_memory_word(OUTPUT_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
-    uint16_t voltage_mV = get_memory_word(OUTPUT_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
-    float current_A = current_mA / 1000.0;
-    float power_W = fabs((voltage_mV / 1000.0) * current_A);
+    current_mA = (int16_t) get_memory_word(OUTPUT_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
+    voltage_mV = get_memory_word(OUTPUT_VOLTAGE_CMD - UPSPLUS_MEMORY_START);
+    current_A = current_mA / 1000.0;
+    power_W = fabs((voltage_mV / 1000.0) * current_A);
 
     upsdebugx(1, "Output Current: %0.3fA", current_A);
     dstate_setinfo("output.current", "%0.3f", current_A);
@@ -1194,22 +1210,23 @@ static void get_realtime_output_state(void)
   
   /* Configure/Calibrate INA219 only if needed */
   {
-    __s32 cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
+    __s32 cfg, cal;
+    cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(cfg, INA219_CONFIGURATION_VALUE)) {
       I2C_WRITE_WORD_INA219(ina219_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
     }
-    __s32 cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
+    cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(cal, INA219_CALIBRATION_VALUE_MAGIC)) {
       I2C_WRITE_WORD_INA219(ina219_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
     }
   }
-  
+
   /* Read values */
-  int attempt = 3;
+  attempt = 3;
   do {
     I2C_READ_WORD_INA219(ina219_fd, INA219_BUSVOLTAGE_CMD, __func__)
   } while (!(data & INA219_CONVERSION_READY) && attempt--);
-  
+
   if (attempt == 0) {
     upsdebugx(1, "INA219 Output Voltage value not ready");
     close(ina219_fd);
@@ -1255,17 +1272,21 @@ static void get_realtime_battery_state(void)
 {
   int16_t data = 0;
   int ina219_fd;
+  int attempt;
 
   upsdebugx(3, __func__);
 
   if (firmware_version >= FIRMWARE_VERSION_INA219_IN_FW) {
-    uint8_t valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
+    uint8_t valid_flags;
+    int16_t current_mA;
+
+    valid_flags = get_memory_byte(CURRENT_VALID_FLAGS_CMD_V29 - UPSPLUS_MEMORY_START);
     if (!(valid_flags & BATTERY_CURRENT_VALID_FLAG)) {
       upsdebugx(2, "Battery current not valid (stale), skipping");
       return;
     }
 
-    int16_t current_mA = (int16_t) get_memory_word(BATTERY_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
+    current_mA = (int16_t) get_memory_word(BATTERY_CURRENT_CMD_V29 - UPSPLUS_MEMORY_START);
     battery_current = current_mA / 1000.0;
 
     upsdebugx(1, "Battery Current: %0.3fA", battery_current);
@@ -1283,22 +1304,23 @@ static void get_realtime_battery_state(void)
   
   /* Configure/Calibrate INA219 only if needed */
   {
-    __s32 cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
+    __s32 cfg, cal;
+    cfg = i2c_smbus_read_word_data(ina219_fd, INA219_CONFIGURATION_CMD);
     if (!reg16_matches(cfg, INA219_CONFIGURATION_VALUE)) {
       I2C_WRITE_WORD_INA219(ina219_fd, INA219_CONFIGURATION_CMD, INA219_CONFIGURATION_VALUE, __func__)
     }
-    __s32 cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
+    cal = i2c_smbus_read_word_data(ina219_fd, INA219_CALIBRATION_CMD);
     if (!reg16_matches(cal, INA219_CALIBRATION_VALUE_MAGIC)) {
       I2C_WRITE_WORD_INA219(ina219_fd, INA219_CALIBRATION_CMD, INA219_CALIBRATION_VALUE_MAGIC, __func__)
     }
   }
-  
+
   /* Read INA219 values */
-  int attempt = 3;
+  attempt = 3;
   do {
     I2C_READ_WORD_INA219(ina219_fd, INA219_BUSVOLTAGE_CMD, __func__)
   } while (!(data & INA219_CONVERSION_READY) && attempt--);
-  
+
   if (attempt == 0) {
     upsdebugx(1, "INA219 Battery Voltage value not ready");
     close(ina219_fd);
@@ -1357,6 +1379,8 @@ static void get_firmware_version(void)
 static void get_serial_number(void)
 {
   __u8 block[12];
+  int fd;
+  int has_data;
 
   upsdebugx(3, __func__);
 
@@ -1368,13 +1392,13 @@ static void get_serial_number(void)
   }
 
   /* Read directly from the UPSPlus (0xF0..0xFB). SN does not change at runtime. */
-  int fd = open_i2c_bus(i2c_bus_path, UPSPLUS_I2C_ADDRESS);
+  fd = open_i2c_bus(i2c_bus_path, UPSPLUS_I2C_ADDRESS);
   if (fd < 0) {
     upsdebugx(2, "Unable to open I2C bus to read serial number");
     return;
   }
 
-  int has_data = 0;
+  has_data = 0;
   for (int i = 0; i < 12; i++) {
     __s32 b = i2c_smbus_read_byte_data(fd, SERIAL_NUMBER_CMD + i);
     if (b < 0) {
@@ -1858,7 +1882,7 @@ static void reset_battery(void)
  have reported issues with setting a timer that is already running with
  a value other than zero.
  */
-int upsplus_setvar(const char *key, const char *value)
+static int upsplus_setvar(const char *key, const char *value)
 {
   short data;
   double voltage;
@@ -1937,7 +1961,7 @@ int upsplus_setvar(const char *key, const char *value)
  have reported issues with setting a timer that is already running with
  a value other than zero.
  */
-int upsplus_instcmd(const char *cmd, const char *reserved)
+static int upsplus_instcmd(const char *cmd, const char *reserved)
 {
   short data;
   
@@ -1996,7 +2020,8 @@ int upsplus_instcmd(const char *cmd, const char *reserved)
 
 void upsdrv_initinfo(void)
 {
-  
+  int memory_result;
+
   dstate_setinfo("ups.mfr", "%s", "UPSPlus HAT");
   dstate_setinfo("ups.type", "%s", "ups");
   dstate_setinfo("ups.model", "%s", "EP-0136");
@@ -2023,7 +2048,7 @@ void upsdrv_initinfo(void)
   /* Attempt to detect the UPSPlus by reading the firmware */
   /* version. First read memory to populate the buffers */
   upsdebugx(2, "Reading initial memory to detect device");
-  int memory_result = read_upsplus_memory();
+  memory_result = read_upsplus_memory();
   upsdebugx(2, "Initial memory read result: %d", memory_result);
   
   get_firmware_version();
@@ -2076,7 +2101,9 @@ void upsdrv_updateinfo(void)
   static int update_count = 0;
   static time_t last_update_call = 0;
   time_t now;
-  
+  int critical_result;
+  int memory_result;
+
   update_count++;
   time(&now);
   
@@ -2089,13 +2116,13 @@ void upsdrv_updateinfo(void)
   last_update_call = now;
   
   /* Read critical real-time data (power status, input voltage) - updated frequently */
-  int critical_result = read_critical_data();
+  critical_result = read_critical_data();
   upsdebugx(2, "read_critical_data() returned: %d", critical_result);
-  
+
   /* Read entire memory buffer with double-read validation - updated on every call */
   /* Note: Critical data (power status, battery voltage/current, input/output voltage) */
   /* is also updated every 2 seconds, so status determination uses fresh data */
-  int memory_result = read_upsplus_memory();
+  memory_result = read_upsplus_memory();
   upsdebugx(2, "read_upsplus_memory() returned: %d", memory_result);
   
   get_battery_full();
