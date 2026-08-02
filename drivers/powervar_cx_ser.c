@@ -39,7 +39,7 @@
 #include "powervar_cx.h"	/* Common driver defines, variables, and functions */
 
 #define DRIVER_NAME	"Powervar-CUSSP UPS driver (Serial)"
-#define DRIVER_VERSION	"1.00"
+#define DRIVER_VERSION	"1.02"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -142,31 +142,35 @@ void upsdrv_initups(void)
 			ser_set_speed(upsfd, device_path, B38400);
 			upsdebugx (4, "Serial baud set to 38400.");
 		}
+#if defined(B57600)
 		else if (ulBaud == 57600)
 		{
 			ser_set_speed(upsfd, device_path, B57600);
 			upsdebugx (4, "Serial baud set to 57600.");
 		}
+#endif
+#if defined(B115200)
 		else if (ulBaud == 115200)	/* The only other baud known to be available. */
 		{
 			ser_set_speed(upsfd, device_path, B115200);
 			upsdebugx (4, "Serial baud set to 115200.");
 		}
+#endif
 		else
 		{
 			upsdebugx (4, "Serial baud not set!! (%" PRIu32 ").", ulBaud);
 		}
 	}
-
-	/*get the UPS in the right frame of mind */
-	ser_send_pace(upsfd, 100, "%s", COMMAND_END);
-	ser_send_pace(upsfd, 100, "%s", COMMAND_END);
-	sleep (1);
 }
 
 /* This function is called on driver startup to initialize variables/commands */
 void upsdrv_initinfo(void)
 {
+	/* Get the UPS in the right frame of mind */
+	ser_send_pace(upsfd, 100, "%s", COMMAND_END);
+	ser_send_pace(upsfd, 100, "%s", COMMAND_END);
+	sleep (1);
+
 	/* Get serial port ready */
 	ser_flush_in(upsfd, "", 0);
 
@@ -194,6 +198,12 @@ void upsdrv_help(void)
 {
 	printf("\n---------\nNOTE:\n");
 	printf("This driver is for connecting to a Powervar UPS serial port at 9600 BPS.\n");
+}
+
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
 }
 
 

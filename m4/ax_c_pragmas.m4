@@ -894,6 +894,65 @@ dnl ###        [CFLAGS="${CFLAGS_SAVED} -Werror=pragmas -Werror=unknown-warning"
     AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_STRICT_PROTOTYPES_BESIDEFUNC], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wstrict-prototypes" (outside functions)])
   ])
 
+  dnl Older GCC and CLANG complain about later-standardized `something={0}`
+  dnl syntax of initialization which zeroes out (struct) bytes:
+  AC_CACHE_CHECK([for pragma GCC diagnostic ignored "-Wmissing-field-initializers"],
+    [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[void func(void) {
+#pragma GCC diagnostic ignored "-Wmissing-field-initializers"
+}
+]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers=yes],
+      [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_missing_field_initializers" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MISSING_FIELD_INITIALIZERS], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wmissing-field-initializers"])
+  ])
+
+  AC_CACHE_CHECK([for pragma GCC diagnostic ignored "-Wmissing-field-initializers" (outside functions)],
+    [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers_besidefunc],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[#pragma GCC diagnostic ignored "-Wmissing-field-initializers"]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers_besidefunc=yes],
+      [ax_cv__pragma__gcc__diags_ignored_missing_field_initializers_besidefunc=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_missing_field_initializers_besidefunc" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MISSING_FIELD_INITIALIZERS_BESIDEFUNC], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wmissing-field-initializers" (outside functions)])
+  ])
+
+  dnl Older GCC and CLANG complain about later-standardized `something={0}`
+  dnl syntax of initialization which zeroes out (struct) bytes even with a
+  dnl non-nested struct like upsdrv_callback_t:
+  AC_CACHE_CHECK([for pragma GCC diagnostic ignored "-Wmissing-braces"],
+    [ax_cv__pragma__gcc__diags_ignored_missing_braces],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[void func(void) {
+#pragma GCC diagnostic ignored "-Wmissing-braces"
+}
+]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_missing_braces=yes],
+      [ax_cv__pragma__gcc__diags_ignored_missing_braces=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_missing_braces" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MISSING_BRACES], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wmissing-braces"])
+  ])
+
+  AC_CACHE_CHECK([for pragma GCC diagnostic ignored "-Wmissing-braces" (outside functions)],
+    [ax_cv__pragma__gcc__diags_ignored_missing_braces_besidefunc],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[#pragma GCC diagnostic ignored "-Wmissing-braces"]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_missing_braces_besidefunc=yes],
+      [ax_cv__pragma__gcc__diags_ignored_missing_braces_besidefunc=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_missing_braces_besidefunc" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_MISSING_BRACES_BESIDEFUNC], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wmissing-braces" (outside functions)])
+  ])
+
   AC_CACHE_CHECK([for pragma GCC diagnostic ignored "-Wassign-enum"],
     [ax_cv__pragma__gcc__diags_ignored_assign_enum],
     [AC_COMPILE_IFELSE(
@@ -1059,6 +1118,33 @@ dnl ###        [CFLAGS="${CFLAGS_SAVED} -Werror=pragmas -Werror=unknown-warning"
   )
   AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_exit_time_destructors_besidefunc" = "yes"],[
     AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_EXIT_TIME_DESTRUCTORS_BESIDEFUNC], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wexit-time-destructors" (outside functions)])
+  ])
+
+  AC_CACHE_CHECK([for C++ pragma GCC diagnostic ignored "-Wdeprecated-declarations"],
+    [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[void func(void) {
+#pragma GCC diagnostic ignored "-Wdeprecated-declarations"
+}
+]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations=yes],
+      [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_deprecated_declarations" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wdeprecated-declarations"])
+  ])
+
+  AC_CACHE_CHECK([for C++ pragma GCC diagnostic ignored "-Wdeprecated-declarations" (outside functions)],
+    [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations_besidefunc],
+    [AC_COMPILE_IFELSE(
+      [AC_LANG_PROGRAM([[#pragma GCC diagnostic ignored "-Wdeprecated-declarations"]], [])],
+      [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations_besidefunc=yes],
+      [ax_cv__pragma__gcc__diags_ignored_deprecated_declarations_besidefunc=no]
+    )]
+  )
+  AS_IF([test "$ax_cv__pragma__gcc__diags_ignored_deprecated_declarations_besidefunc" = "yes"],[
+    AC_DEFINE([HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_DEPRECATED_DECLARATIONS_BESIDEFUNC], 1, [define if your compiler has #pragma GCC diagnostic ignored "-Wdeprecated-declarations" (outside functions)])
   ])
 
   AC_CACHE_CHECK([for C++ pragma GCC diagnostic ignored "-Wsuggest-override" (outside functions)],

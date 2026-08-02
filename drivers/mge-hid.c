@@ -3,7 +3,7 @@
  *  Copyright (C)
  *        2003 - 2015 Arnaud Quette <arnaud.quette@free.fr>
  *        2015 - 2024 Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
- *        2020 - 2025 Jim Klimov <jimklimov+nut@gmail.com>
+ *        2020 - 2026 Jim Klimov <jimklimov+nut@gmail.com>
  *        2024 - 2025 "DaRK AnGeL" <28630321+masterwishx@users.noreply.github.com>
  *
  *  Sponsored by MGE UPS SYSTEMS <http://www.mgeups.com>
@@ -52,7 +52,7 @@
 # endif
 #endif	/* WIN32 */
 
-#define MGE_HID_VERSION		"MGE HID 1.55"
+#define MGE_HID_VERSION		"MGE HID 1.59"
 
 /* (prev. MGE Office Protection Systems, prev. MGE UPS SYSTEMS) */
 /* Eaton */
@@ -73,7 +73,7 @@
 /* Note that normally this VID is handled by Liebert/Phoenixtec HID mapping,
  * here it is just for for AEG PROTECT NAS devices: */
 /* Phoenixtec Power Co., Ltd */
-#define PHOENIXTEC		0x06da
+#define PHOENIXTEC_VENDORID	0x06da
 
 /* IBM */
 #define IBM_VENDORID		0x04b3
@@ -106,7 +106,7 @@ static usb_device_id_t mge_usb_device_table[] = {
 
 	/* PROTECT B / NAS */
 	{ USB_DEVICE(AEG_VENDORID, 0xffff), NULL },
-	{ USB_DEVICE(PHOENIXTEC, 0xffff), NULL },
+	{ USB_DEVICE(PHOENIXTEC_VENDORID, 0xffff), NULL },
 
 	/* 6000 VA LCD 4U Rack UPS; 5396-1Kx */
 	{ USB_DEVICE(IBM_VENDORID, 0x0001), NULL },
@@ -121,6 +121,8 @@ static usb_device_id_t mge_usb_device_table[] = {
 #endif	/* !SHUT_MODE => USB */
 
 typedef enum {
+	/* See note in the sentinel (last) entry of the mapping table
+	 * if you ever want to change this name to a different number */
 	MGE_DEFAULT_OFFLINE = 0,
 	MGE_PEGASUS = 0x100,
 	MGE_3S = 0x110,
@@ -556,6 +558,19 @@ static const char *eaton_abm_check_chrg_fun(double value)
 	if (advanced_battery_monitoring == ABM_UNKNOWN || advanced_battery_monitoring == ABM_DISABLED)
 	{
 		if (d_equal(value, 1)) {
+			/* UPS.PowerSummary.PresentStatus.Charging stays asserted in
+			 * float/maintenance mode on CC-mode devices (e.g. Eaton 5E series)
+			 * that do not expose the ABM HID path. Suppress CHRG once the
+			 * battery is fully charged so that ups.status does not show a
+			 * persistent OL CHRG at 100%. */
+			const char	*charge_str = dstate_getinfo("battery.charge");
+			if (charge_str != NULL) {
+				double	charge = strtod(charge_str, NULL);
+				if (charge >= 100.0) {
+					snprintf(mge_scratch_buf, sizeof(mge_scratch_buf), "%s", "!chrg");
+					return mge_scratch_buf;
+				}
+			}
 			snprintf(mge_scratch_buf, sizeof(mge_scratch_buf), "%s", "chrg");
 		}
 		else {
@@ -1843,6 +1858,12 @@ static models_name_t mge_model_names [] =
 	 * USB metadata; the trailing space after "1200 " was significant for matching it.
 	 */
 	{ "Ellipse PRO", "1200 ", EATON_5P, "Eaton 5S1200" },
+	/* US version, 5S1500LCD, per
+	 * https://github.com/networkupstools/nut/issues/2380#issuecomment-3263848849
+	 */
+	{ "Ellipse PRO", "1500 ", EATON_5P, "Eaton 5S1500" },
+	/* https://github.com/networkupstools/nut/issues/2380#issuecomment-3380826913 */
+	{ "Ellipse PRO", "1600 ", EATON_5P, "Eaton 5S1600" },
 
 	/* Eaton 9E entry-level series per discussions in
 	 * https://github.com/networkupstools/nut/issues/1925
@@ -1965,7 +1986,12 @@ static models_name_t mge_model_names [] =
 	{ "GALAXY", "3000_30", MGE_DEFAULT, "Galaxy 3000 30 kVA" },
 
 	/* end of structure. */
-	{ NULL, NULL, 0, NULL }
+	/* NOTE: Compilers want a named enum value here;
+	 *  table-iteration code may care about it being
+	 *  exactly zero to act as a sentinel. If you ever
+	 *  need to redefine MGE_DEFAULT_OFFLINE to another
+	 *  number, provide a name that resolves to zero here. */
+	{ NULL, NULL, MGE_DEFAULT_OFFLINE, NULL }
 };
 
 
@@ -2046,9 +2072,9 @@ static hid_info_t mge_hid2nut[] =
 	{ "ups.test.interval", ST_FLAG_RW | ST_FLAG_STRING, 8, "UPS.BatterySystem.Battery.TestPeriod", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
 	/* Duplicate data for some units (such as 3S) that use a different path
 	 * Only the first valid one will be used */
-	{ "ups.beeper.status", 0 ,0, "UPS.BatterySystem.Battery.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },
-	{ "ups.beeper.status", 0 ,0, "UPS.PowerSummary.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },
-	{ "ups.beeper.status", 0 ,0, "UPS.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },	/* yonesmit - support for Masterpower MF-UPS650VA */
+	{ "ups.beeper.status", 0, 0, "UPS.BatterySystem.Battery.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },
+	{ "ups.beeper.status", 0, 0, "UPS.PowerSummary.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },
+	{ "ups.beeper.status", 0, 0, "UPS.AudibleAlarmControl", NULL, "%s", HU_FLAG_SEMI_STATIC, beeper_info },	/* yonesmit - support for Masterpower MF-UPS650VA */
 	{ "ups.temperature", 0, 0, "UPS.PowerSummary.Temperature", NULL, "%s", 0, kelvin_celsius_conversion },
 	{ "ups.power", 0, 0, "UPS.PowerConverter.Output.ApparentPower", NULL, "%.0f", 0, NULL },
 	{ "ups.L1.power", 0, 0, "UPS.PowerConverter.Output.Phase.[1].ApparentPower", NULL, "%.0f", 0, NULL },
@@ -2214,7 +2240,9 @@ static hid_info_t mge_hid2nut[] =
 	{ "output.frequency.nominal", 0, 0, "UPS.Flow.[4].ConfigFrequency", NULL, "%.0f", HU_FLAG_STATIC, NULL },
 	{ "output.powerfactor", 0, 0, "UPS.PowerConverter.Output.PowerFactor", NULL, "%s", 0, mge_powerfactor_conversion },
 
-	/* Outlet page (using MGE UPS SYSTEMS - PowerShare technology) */
+	/* Outlet page (using MGE UPS SYSTEMS - PowerShare technology)
+	 * Summary, the "main" or the only outlet group is seen in Outlet.[1].* values
+	 */
 	{ "outlet.id", 0, 0, "UPS.OutletSystem.Outlet.[1].OutletID", NULL, "%.0f", HU_FLAG_STATIC, NULL },
 	{ "outlet.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[1].OutletID", NULL, "Main Outlet", HU_FLAG_ABSENT, NULL },
 	{ "outlet.switchable", 0, 0, "UPS.OutletSystem.Outlet.[1].PresentStatus.Switchable", NULL, "%s", HU_FLAG_STATIC, yes_no_info },
@@ -2228,14 +2256,14 @@ static hid_info_t mge_hid2nut[] =
 	{ "outlet.current", 0, 0, "UPS.OutletSystem.Outlet.[1].Current", NULL, "%.2f", 0, NULL },
 	{ "outlet.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[1].PowerFactor", NULL, "%.2f", 0, NULL }, /* "%s", 0, mge_powerfactor_conversion }, */
 
-	/* First outlet */
+	/* First outlet (group) [2] */
 	{ "outlet.1.id", 0, 0, "UPS.OutletSystem.Outlet.[2].OutletID", NULL, "%.0f", HU_FLAG_STATIC, NULL },
 	{ "outlet.1.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[2].OutletID", NULL, "PowerShare Outlet 1", HU_FLAG_ABSENT, NULL },
 	{ "outlet.1.switchable", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.Switchable", NULL, "%s", HU_FLAG_STATIC, yes_no_info },
-	/* FIXME: should better use UPS.OutletSystem.Outlet.[1].Status? */
+	/* FIXME: should better use UPS.OutletSystem.Outlet.[2].Status? */
 	{ "outlet.1.status", 0, 0, "UPS.OutletSystem.Outlet.[2].PresentStatus.SwitchOn/Off", NULL, "%s", 0, on_off_info },
-	{ "outlet.1.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[1].Status", NULL, "%s", 0, eaton_outlet_protection_status_info },
-	{ "outlet.1.designator", 0, 0, "UPS.OutletSystem.Outlet.[1].iDesignator", NULL, NULL, HU_FLAG_STATIC, stringid_conversion }, /* FIXME */
+	{ "outlet.1.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[2].Status", NULL, "%s", 0, eaton_outlet_protection_status_info },
+	{ "outlet.1.designator", 0, 0, "UPS.OutletSystem.Outlet.[2].iDesignator", NULL, NULL, HU_FLAG_STATIC, stringid_conversion }, /* FIXME */
 	/* For low end models, with 1 non backup'ed outlet */
 	{ "outlet.1.status", 0, 0, "UPS.PowerSummary.PresentStatus.ACPresent", NULL, "%s", 0, on_off_info },
 	/* FIXME: change to outlet.1.battery.charge.low, as in mge-xml.c?! */
@@ -2248,7 +2276,8 @@ static hid_info_t mge_hid2nut[] =
 	{ "outlet.1.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[2].PowerFactor", NULL, "%.2f", 0, NULL }, /* "%s", 0, mge_powerfactor_conversion }, */
 	/* 0: The outlet is not ECO controlled. / 1 : The outlet is ECO controlled. => Readonly! use some yes_no_info */
 	{ "outlet.1.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[2].ECOControl", NULL, "%s", HU_FLAG_SEMI_STATIC, outlet_eco_yes_no_info},
-	/* Second outlet */
+
+	/* Second outlet (group) [3] */
 	{ "outlet.2.id", 0, 0, "UPS.OutletSystem.Outlet.[3].OutletID", NULL, "%.0f", HU_FLAG_STATIC, NULL },
 	{ "outlet.2.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[3].OutletID", NULL, "PowerShare Outlet 2", HU_FLAG_ABSENT, NULL },
 	/* needed for Pegasus to enable master/slave mode:
@@ -2258,7 +2287,7 @@ static hid_info_t mge_hid2nut[] =
 	{ "outlet.2.switchable", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.Switchable", NULL, "%s", 0, yes_no_info },
 	{ "outlet.2.status", 0, 0, "UPS.OutletSystem.Outlet.[3].PresentStatus.SwitchOn/Off", NULL, "%s", 0, on_off_info },
 	{ "outlet.2.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[3].Status", NULL, "%s", 0, eaton_outlet_protection_status_info },
-	/* FIXME: should better use UPS.OutletSystem.Outlet.[1].Status? */
+	/* FIXME: should better use UPS.OutletSystem.Outlet.[3].Status? */
 	{ "outlet.2.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[3].RemainingCapacityLimit", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
 	{ "outlet.2.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].ShutdownTimer", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
 	{ "outlet.2.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[3].StartupTimer", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
@@ -2268,6 +2297,27 @@ static hid_info_t mge_hid2nut[] =
 	{ "outlet.2.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[3].PowerFactor", NULL, "%.2f", 0, NULL }, /* "%s", 0, mge_powerfactor_conversion }, */
 	/* 0: The outlet is not ECO controlled. / 1 : The outlet is ECO controlled. => Readonly! use some yes_no_info */
 	{ "outlet.2.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[3].ECOControl", NULL, "%s", HU_FLAG_SEMI_STATIC, outlet_eco_yes_no_info},
+
+	/* Third outlet (group) [4] */
+	{ "outlet.3.id", 0, 0, "UPS.OutletSystem.Outlet.[4].OutletID", NULL, "%.0f", HU_FLAG_STATIC, NULL },
+	{ "outlet.3.desc", ST_FLAG_RW | ST_FLAG_STRING, 20, "UPS.OutletSystem.Outlet.[4].OutletID", NULL, "PowerShare Outlet 2", HU_FLAG_ABSENT, NULL },
+	/* needed for Pegasus to enable master/slave mode:
+	 * FIXME: rename to something more suitable (outlet.?) */
+	{ "outlet.3.switchable", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", NULL, "%s", HU_FLAG_SEMI_STATIC, pegasus_yes_no_info },
+	/* Generic version (RO) for other models */
+	{ "outlet.3.switchable", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.Switchable", NULL, "%s", 0, yes_no_info },
+	{ "outlet.3.status", 0, 0, "UPS.OutletSystem.Outlet.[4].PresentStatus.SwitchOn/Off", NULL, "%s", 0, on_off_info },
+	{ "outlet.3.protect.status", 0, 0, "UPS.OutletSystem.Outlet.[4].Status", NULL, "%s", 0, eaton_outlet_protection_status_info },
+	/* FIXME: should better use UPS.OutletSystem.Outlet.[4].Status? */
+	{ "outlet.3.autoswitch.charge.low", ST_FLAG_RW | ST_FLAG_STRING, 3, "UPS.OutletSystem.Outlet.[4].RemainingCapacityLimit", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
+	{ "outlet.3.delay.shutdown", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].ShutdownTimer", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
+	{ "outlet.3.delay.start", ST_FLAG_RW | ST_FLAG_STRING, 5, "UPS.OutletSystem.Outlet.[4].StartupTimer", NULL, "%.0f", HU_FLAG_SEMI_STATIC, NULL },
+	{ "outlet.3.power", 0, 0, "UPS.OutletSystem.Outlet.[4].ApparentPower", NULL, "%.0f", 0, NULL },
+	{ "outlet.3.realpower", 0, 0, "UPS.OutletSystem.Outlet.[4].ActivePower", NULL, "%.0f", 0, NULL },
+	{ "outlet.3.current", 0, 0, "UPS.OutletSystem.Outlet.[4].Current", NULL, "%.2f", 0, NULL },
+	{ "outlet.3.powerfactor", 0, 0, "UPS.OutletSystem.Outlet.[4].PowerFactor", NULL, "%.2f", 0, NULL }, /* "%s", 0, mge_powerfactor_conversion }, */
+	/* 0: The outlet is not ECO controlled. / 1 : The outlet is ECO controlled. => Readonly! use some yes_no_info */
+	{ "outlet.3.ecocontrol", 0, 0, "UPS.OutletSystem.Outlet.[4].ECOControl", NULL, "%s", HU_FLAG_SEMI_STATIC, outlet_eco_yes_no_info},
 
 	/* instant commands. */
 	/* splited into subset while waiting for extradata support
@@ -2298,6 +2348,8 @@ static hid_info_t mge_hid2nut[] =
 	{ "outlet.1.load.on", 0, 0, "UPS.OutletSystem.Outlet.[2].DelayBeforeStartup", NULL, "0", HU_TYPE_CMD, NULL },
 	{ "outlet.2.load.off", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeShutdown", NULL, "0", HU_TYPE_CMD, NULL },
 	{ "outlet.2.load.on", 0, 0, "UPS.OutletSystem.Outlet.[3].DelayBeforeStartup", NULL, "0", HU_TYPE_CMD, NULL },
+	{ "outlet.3.load.off", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeShutdown", NULL, "0", HU_TYPE_CMD, NULL },
+	{ "outlet.3.load.on", 0, 0, "UPS.OutletSystem.Outlet.[4].DelayBeforeStartup", NULL, "0", HU_TYPE_CMD, NULL },
 
 	/* Command to switch ECO(HE), ESS Mode */
 	{ "experimental.ecomode.stop", 0, 0, "UPS.PowerConverter.Input.[5].Switchable", NULL, "0", HU_TYPE_CMD, NULL },
@@ -2459,7 +2511,7 @@ static int mge_claim(HIDDevice_t *hd) {
 				 */
 				return 0;
 
-			case PHOENIXTEC:
+			case PHOENIXTEC_VENDORID:
 				/* The vendorid 0x06da is primarily handled by
 				 * liebert-hid, except for (maybe) AEG PROTECT NAS
 				 * branded devices */
@@ -2495,7 +2547,7 @@ static int mge_claim(HIDDevice_t *hd) {
 
 		switch (hd->VendorID)
 		{
-			case PHOENIXTEC: /* see comments above */
+			case PHOENIXTEC_VENDORID: /* see comments above */
 				if (hd->Vendor && strstr(hd->Vendor, "AEG")) {
 					return 1;
 				}

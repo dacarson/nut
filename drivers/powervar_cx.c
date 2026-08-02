@@ -565,8 +565,8 @@ void PvarCommon_Initinfo (void)
 		}
 	}
 
-	sprintf (Msg, "Found a Powervar '%s' UPS with serial number: '%s'", UpsFamily, SubBuff);
-	upsdebugx (2, "%s", Msg);
+	snprintf(Msg, sizeof(Msg), "Found a Powervar '%s' UPS with serial number: '%s'", UpsFamily, SubBuff);
+	upsdebugx(2, "%s", Msg);
 	upslogx(LOG_INFO, "%s", Msg);
 
 	/* Get BAT format and populate needed data string positions... */
@@ -853,7 +853,7 @@ void PvarCommon_Initinfo (void)
 	dstate_setflags("ups.delay.start", ST_FLAG_STRING | ST_FLAG_RW);
 	dstate_setaux("ups.delay.start", GET_STARTDELAY_RESP_SIZE);
 
-	upsh.setvar = setcmd;
+	upsh.setvar = setvar;
 	upsh.instcmd = instcmd;
 }
 
@@ -1115,7 +1115,7 @@ static void HandleBeeper (char* chS)
 	char chBuff[18];
 
 	memset(chBuff, 0, sizeof(chBuff));
-	sprintf(chBuff, "%s%s", SET_AUDIBL_REQ, chS);
+	snprintf(chBuff, sizeof(chBuff), "%s%s", SET_AUDIBL_REQ, chS);
 
 	SendCommand (chBuff);
 }
@@ -1132,7 +1132,7 @@ static void HandleOffDelay (void)
 		delay++;		/* Make it '1' */
 	}
 
-	sprintf(chOutBuff, "%s%d", SET_OFFDLY_REQ, delay);
+	snprintf(chOutBuff, sizeof(chOutBuff), "%s%d", SET_OFFDLY_REQ, delay);
 
 	SendCommand (chOutBuff);
 }
@@ -1145,11 +1145,11 @@ static void HandleOnDelay (void)
 
 	if (dstate_getinfo("ups.delay.start") == NULL)
 	{
-		sprintf(chBuff, "%s1", SET_SRTDLY_REQ);
+		snprintf(chBuff, sizeof(chBuff), "%s1", SET_SRTDLY_REQ);
 	}
 	else
 	{
-		sprintf(chBuff, "%s%s", SET_SRTDLY_REQ, dstate_getinfo("ups.delay.start"));
+		snprintf(chBuff, sizeof(chBuff), "%s%s", SET_SRTDLY_REQ, dstate_getinfo("ups.delay.start"));
 	}
 
 	SendCommand (chBuff);
@@ -1308,16 +1308,16 @@ int instcmd(const char *cmdname, const char *extra)
 
 		memset(chBuff, 0, sizeof(chBuff));
 
-		sprintf(chBuff, "%s%d", TST_DISP_REQ, ShowTime);
+		snprintf(chBuff, sizeof(chBuff), "%s%d", TST_DISP_REQ, ShowTime);
 		SendCommand (chBuff);
 	}
 
 	return STAT_INSTCMD_UNKNOWN;
 }
 
-int setcmd(const char* varname, const char* setvalue)
+int setvar(const char* varname, const char* setvalue)
 {
-	upsdebugx(2, "In setcmd for %s with %s...", varname, setvalue);
+	upsdebugx(2, "In setvar for %s with %s...", varname, setvalue);
 
 	if (!strcasecmp(varname, "ups.delay.shutdown"))
 	{
@@ -1380,7 +1380,7 @@ int setcmd(const char* varname, const char* setvalue)
 		return STAT_SET_UNKNOWN;
 	}
 
-	upslogx(LOG_NOTICE, "setcmd: unknown command [%s]", varname);
+	upslogx(LOG_NOTICE, "setvar: unknown command [%s]", varname);
 
 	return STAT_SET_UNKNOWN;
 }

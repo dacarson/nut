@@ -1,12 +1,15 @@
 #
 # Network UPS Tools: AppVeyor CI build recipe: NUT for Windows with MSYS2/MinGW x64
 #
+# Copyright (C) 2022-2026	Jim Klimov <jimklimov+nut@gmail.com>
+#
+# Inspired by docs:
 # https://www.msys2.org/docs/ci/
 # https://www.appveyor.com/docs/appveyor-yml/
 # https://www.appveyor.com/docs/build-configuration/
 # https://www.appveyor.com/docs/windows-images-software/
 
-version: 2.8.4.{build}-{branch}
+version: 2.8.5.{build}-{branch}
 
 # base image
 image: Visual Studio 2022
@@ -27,6 +30,28 @@ environment:
   APPVEYOR_SAVE_CACHE_ON_ERROR: true
   APPVEYOR_CACHE_ENTRY_ZIP_ARGS: -t7z -m0=lzma -mx=6
   CCACHE_DIR: /home/appveyor/.ccache
+  DO_CLEAN_NUTCI_CACHE: no
+  DO_USE_NUTCI_CACHE: yes
+  MSYS: "winsymlinks:nativestrict"
+
+# Customize GH notification message template
+# TODO: for repetitive commits in a PR consider a clean-up GHA like
+#  https://github.com/marketplace/actions/delete-pr-comments-during-subsequent-ci
+notifications:
+  - provider: GitHubPullRequest
+    on_build_success: true
+    on_build_failure: true
+    on_build_status_changed: false
+    template: |
+      {{#passed}}:white_check_mark:{{/passed}}{{#failed}}:x:{{/failed}} [Build {{&projectName}} {{buildVersion}} {{status}}]({{buildUrl}}) (commit {{commitUrl}} by @{{&commitAuthorUsername}})
+      * [artifacts{{#failed}} (if any){{/failed}}]({{buildurl}}/artifacts)
+      {{#passed}}
+        {{#jobs}}
+          {{#messages}}
+      * {{message}}
+          {{/messages}}
+        {{/jobs}}
+      {{/passed}}
 
 # https://github.com/networkupstools/nut/blob/Windows-v2.8.0-1/docs/config-prereqs.txt#L951
 # or look for the chapter in nearby lines in later (current) revisions.
@@ -63,7 +88,7 @@ install:
 # versions of packages.
   - cmd: |
         REM Prerequisites for NUT per https://github.com/networkupstools/nut/blob/master/docs/config-prereqs.txt :
-        C:\msys64\usr\bin\bash -lc "date -u; pacman --noconfirm -S --needed base-devel mingw-w64-x86_64-toolchain autoconf-wrapper automake-wrapper libtool mingw-w64-x86_64-libltdl gcc ccache mingw-w64-x86_64-ccache git aspell aspell-en python mingw-w64-x86_64-python-pygments mingw-w64-x86_64-winpthreads-git mingw-w64-x86_64-libusb mingw-w64-x86_64-libusb-compat-git mingw-w64-x86_64-neon libneon-devel mingw-w64-x86_64-libgd mingw-w64-x86_64-cppunit"
+        C:\msys64\usr\bin\bash -lc "date -u; pacman --noconfirm -S --needed base-devel mingw-w64-x86_64-toolchain autoconf-wrapper automake-wrapper libtool mingw-w64-x86_64-libltdl gcc ccache mingw-w64-x86_64-ccache git aspell aspell-en python mingw-w64-x86_64-python-pygments mingw-w64-x86_64-winpthreads-git mingw-w64-x86_64-libusb mingw-w64-x86_64-libusb-compat-git mingw-w64-x86_64-neon libneon-devel mingw-w64-x86_64-libgd mingw-w64-x86_64-cppunit mingw-w64-x86_64-nss mingw-w64-x86_64-openssl"
         REM SKIP mingw-w64-x86_64-libmodbus-git : we custom-build one with USB support
         REM SKIP for now NUT-Monitor prereqs (runtime Python would require somilar modules; need to fix localization builds like "fr.po"): gettext mingw-w64-x86_64-python-pyqt6
 
@@ -106,7 +131,16 @@ build_script:
         set MSYSTEM=MINGW64
         REM Note: currently we save job time and do not install asciidoc/a2x
         REM  # --with-docs="man=auto html-single=auto html-chunked=no pdf=no"
-        C:\msys64\usr\bin\bash -lc 'date -u; PATH="/mingw64/bin:$PATH" CI_SKIP_CHECK=true CANBUILD_WITH_LIBMODBUS_USB=yes ./ci_build.sh --with-docs=no'
+        REM The resulting configuration defaults to --prefix=/mingw{32,64}
+        REM as appropriate for the platform, which ends up as a subdirectory
+        REM under DESTDIR when we `make install` later, and in our 7z archive.
+        REM The builds are relocatable however, so end-users can extract to
+        REM e.g. "C:\Program Files\NUT" and forfeit "mingwXX" part, probably,
+        REM but this can complicate automatic relative directory resolution
+        REM to find "nearby" program or configuration files (see common.c
+        REM for current implementation). Hard-coded fallback strings may
+        REM end up getting used in those cases.
+        C:\msys64\usr\bin\bash -lc 'date -u; PATH="/mingw64/bin:$PATH" CI_SKIP_CHECK=true CANBUILD_WITH_LIBMODBUS_USB=yes WITH_LIBNUTPRIVATE=true NUT_SSL_VARIANTS=nss ./ci_build.sh --with-docs=no'
 
 
 after_build:
@@ -138,9 +172,21 @@ after_test:
         set MSYSTEM=MINGW64
         REM Oh the joys of shell scripting with strings passed through CMD:
         REM Note: currently Python installation path with MSYS is buggy [#1584]
-        C:\msys64\usr\bin\bash -lc 'date -u; set -e ; if ! rm -rf ".inst" ; then echo "WARNING: Failed to clean away .inst" ; fi ; PATH="/mingw64/lib/ccache/bin:/mingw64/bin:$PATH" make -s -j 8 install-win-bundle DESTDIR="`pwd`/.inst/NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%" ; rm -rf ./.inst/NUT-for-Windows-x86_64-SNAPSHOT || true ; ln -fs "NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%" ./.inst/NUT-for-Windows-x86_64-SNAPSHOT ; ( cd .inst/NUT-for-Windows-x86_64-SNAPSHOT ; find . -ls ; ) ; date -u'
+        C:\msys64\usr\bin\bash -lc 'date -u; set -e ; if ! rm -rf ".inst" ; then echo "WARNING: Failed to clean away .inst" ; fi ; PATH="/mingw64/lib/ccache/bin:/mingw64/bin:$PATH" make -s -j 8 install-win-bundle DESTDIR="`pwd`/.inst/NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%"'
+        C:\msys64\usr\bin\bash -lc 'date -u; set -e ; rm -rf ./.inst/NUT-for-Windows-x86_64-SNAPSHOT || true ; ln -fs "NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%" ./.inst/NUT-for-Windows-x86_64-SNAPSHOT ; ( cd .inst/NUT-for-Windows-x86_64-SNAPSHOT ; find . -ls ; )'
+        C:\msys64\usr\bin\bash -lc 'date -u'
         cd .inst
-        7z a ../NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%.7z NUT*
+        REM 7z -snh: hoping for a version that can save hardlinks as such, and in 7z format to boot:
+        7z a -snh ../NUT-for-Windows-x86_64-SNAPSHOT-%APPVEYOR_BUILD_VERSION%.7z NUT*
+
+  # Consider APPVEYOR_PULL_REQUEST_HEAD_COMMIT (PR) vs APPVEYOR_REPO_COMMIT (target branch, or ephemeral)
+  - ps: |
+        $nut7z = "NUT-for-Windows-x86_64-SNAPSHOT-$($env:APPVEYOR_BUILD_VERSION).7z"
+        $msg = "A 7-zip archive with built NUT for Windows debug binaries is temporarily available: [$($nut7z)]($($env:APPVEYOR_URL)/api/buildjobs/$($env:APPVEYOR_JOB_ID)/artifacts/$($nut7z))"
+        echo $msg
+        echo "build-id:$($env:APPVEYOR_BUILD_ID) job-id:$($env:APPVEYOR_JOB_ID) prj-id:$($env:APPVEYOR_PROJECT_ID)"
+        Add-AppveyorMessage $msg
+
   - cmd: |
         REM Preserve the current working directory:
         set CHERE_INVOKING=yes
@@ -163,7 +209,10 @@ artifacts:
 # Example optional cache (depends on file change):
 # - C:\msys64 -> appveyor.yml
 cache:
+  - C:\projects\nut\config.cache
+  - C:\projects\.cache\nut-ci
   - C:\msys64\home\appveyor\nut-win-deps
+  - C:\msys64\home\appveyor\.cache\nut-ci
   - C:\msys64\home\appveyor\.ccache
   - C:\msys64\home\appveyor\ccache # likely missing, no problem - but the name is reported in ccache status
   - C:\Users\appveyor\AppData\Local\ccache # may be default in newer versions

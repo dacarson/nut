@@ -6,7 +6,7 @@
  *   2005-2006 Peter Selinger <selinger@users.sourceforge.net>
  *   2007-2009 Arjen de Korte <adkorte-guest@alioth.debian.org>
  *   2016      Eaton / Arnaud Quette <ArnaudQuette@Eaton.com>
- *   2020-2025 Jim Klimov <jimklimov+nut@gmail.com>
+ *   2020-2026 Jim Klimov <jimklimov+nut@gmail.com>
  *
  * This program was sponsored by MGE UPS SYSTEMS, and now Eaton
  *
@@ -29,7 +29,7 @@
  */
 
 #define DRIVER_NAME	"Generic HID driver"
-#define DRIVER_VERSION	"0.67"
+#define DRIVER_VERSION	"0.73"
 
 #define HU_VAR_WAITBEFORERECONNECT "waitbeforereconnect"
 
@@ -44,6 +44,9 @@
 #ifdef WIN32
 #include "wincompat.h"
 #endif	/* WIN32 */
+#if !((defined SHUT_MODE) && SHUT_MODE) && defined WIN32
+#include "libwinhid.h"
+#endif	/* !SHUT_MODE => USB && WIN32 */
 
 /* include all known subdrivers */
 #include "mge-hid.h"
@@ -285,6 +288,7 @@ typedef struct {
 static status_lkp_t status_info[] = {
 	/* map internal status strings to bit masks */
 	{ "online", STATUS(ONLINE) },
+	{ "offline", STATUS(OFFLINE) },
 	{ "dischrg", STATUS(DISCHRG) },
 	{ "chrg", STATUS(CHRG) },
 	{ "lowbatt", STATUS(LOWBATT) },
@@ -304,6 +308,7 @@ static status_lkp_t status_info[] = {
 	{ "depleted", STATUS(DEPLETED) },
 	{ "timelimitexp", STATUS(TIMELIMITEXP) },
 	{ "fullycharged", STATUS(FULLYCHARGED) },
+	{ "notfullycharged", STATUS(NOTFULLYCHARGED) },
 	{ "awaitingpower", STATUS(AWAITINGPOWER) },
 	{ "fanfail", STATUS(FANFAIL) },
 	{ "nobattery", STATUS(NOBATTERY) },
@@ -340,7 +345,7 @@ static status_lkp_t status_info[] = {
 
 info_lkp_t online_info[] = {
 	{ 1, "online", NULL, NULL },
-	{ 0, "!online", NULL, NULL },
+	{ 0, "offline", NULL, NULL },	/* previously was "!online" but that proved ambiguous */
 	{ 0, NULL, NULL, NULL }
 };
 info_lkp_t discharging_info[] = {
@@ -410,7 +415,8 @@ info_lkp_t calibration_info[] = {
 	{ 0, "!cal", NULL, NULL },
 	{ 0, NULL, NULL, NULL }
 };
-/* note: this value is reverted (0=set, 1=not set). We report "battery
+/* note: this value is reverted (0=set, 1=not set), often known as
+   "BatteryPresent" in the HID mapping tables. We report "battery
    not installed" rather than "battery installed", so that devices
    that don't implement this variable have a battery by default */
 info_lkp_t nobattery_info[] = {
@@ -463,9 +469,9 @@ info_lkp_t chargerfail_info[] = {
 	{ 0, "!chargerfail", NULL, NULL },
 	{ 0, NULL, NULL, NULL }
 };
-info_lkp_t fullycharged_info[] = { /* used by CyberPower and TrippLite */
+info_lkp_t fullycharged_info[] = { /* used by CyberPower and TrippLite, and some other HIDs */
 	{ 1, "fullycharged", NULL, NULL },
-	{ 0, "!fullycharged", NULL, NULL },
+	{ 0, "notfullycharged", NULL, NULL },
 	{ 0, NULL, NULL, NULL }
 };
 info_lkp_t depleted_info[] = {
@@ -530,7 +536,7 @@ static const char *date_conversion_fun(double value)
 	 * 4.2.6 Battery Settings -> ManufacturerDate
 	 *   The date the pack was manufactured in a packed integer.
 	 *   The date is packed in the following fashion:
-	 *   (year – 1980)*512 + month*32 + day.
+	 *   (year - 1980)*512 + month*32 + day.
 	 */
 	static char buf[32];
 	long year, month, day;
@@ -621,16 +627,16 @@ info_lkp_t divide_by_10_conversion[] = {
    done with result! */
 static const char *divide_by_100_conversion_fun(double value)
 {
-       static char buf[20];
+	static char buf[20];
 
-       snprintf(buf, sizeof(buf), "%0.1f", value * 0.01);
+	snprintf(buf, sizeof(buf), "%0.1f", value * 0.01);
 
-       return buf;
+	return buf;
 }
 
 /* FIXME? Do we need an inverse "nuf()" here? */
 info_lkp_t divide_by_100_conversion[] = {
-       { 0, NULL, divide_by_100_conversion_fun, NULL }
+	{ 0, NULL, divide_by_100_conversion_fun, NULL }
 };
 
 /* returns statically allocated string - must not use it again before
@@ -658,6 +664,190 @@ static const char *kelvin_celsius_conversion_fun(double value)
 info_lkp_t kelvin_celsius_conversion[] = {
 	{ 0, NULL, kelvin_celsius_conversion_fun, NULL }
 };
+
+static void analyze_mapping_usage(void) {
+	/* Check if the subdriver code (mappings) and the device report
+	 * sit together well. Note that for yet-unknown concepts, the
+	 * NUT driver developers can either raise a discussion on how
+	 * to best formalize that concept via docs/nut-names.txt, or
+	 * temporarily place them into "experimental.*" or "unmapped.*"
+	 * namespaces.
+	 *
+	 * Later also check that all defined mappings were used?
+	 * TBH, this is unlikely in practice, so of little value
+	 * (unless we are troubleshooting and under 5 or 10 data
+	 * points are served from actually the device, and not
+	 * from user configs or driver fallbacks).
+	 *
+	 * See also: similar methods in snmp-ups and nutdrv_qx.
+	 */
+	size_t	d, unused_count = 0, halfused_count = 0;
+	size_t	unused_bufsize = LARGEBUF, halfused_bufsize = LARGEBUF, unused_prevlen = 0, halfused_prevlen = 0, used_mappings = 0, known_mappings = 0;
+	int	ret_printf;
+	char	*unused_names = NULL, *halfused_names = NULL;
+	hid_info_t	*hidups_item;
+
+	/* FIXME? this activity is limited to when debugging is enabled, even
+	 *  if some of the messages below can be posted visibly at level 0.
+	 */
+	if (nut_debug_level < 1)
+		return;
+
+	upsdebugx(1, "%s: checking if the subdriver code (mappings) "
+		"consults all data points from the device report",
+		__func__);
+
+	if (!pDesc) {
+		upsdebugx(1, "%s: SKIP: pDesc==null", __func__);
+		return;
+	}
+
+	unused_names = (char *)xcalloc(unused_bufsize, sizeof(char));
+	halfused_names = (char *)xcalloc(halfused_bufsize, sizeof(char));
+
+	for (d = 0; d < pDesc->nitems; d++) {
+		HIDData_t	*pData = &pDesc->item[d];
+
+		if (pData && !(pData->mapping_handled)) {
+			char	*pName = HIDGetDataItem(pData, subdriver->utab);
+			const char	*pType = HIDDataType(pData);
+			int	retry = 0;
+			char	**pNames = &unused_names;
+			size_t	*pCount = &unused_count, *pPrevLen = &unused_prevlen, *pBufSize = &unused_bufsize;
+
+			if (!pName) {
+				upsdebugx(2, "%s: error getting a Report Path name, skipped", __func__);
+				continue;
+			} else {
+				/* check if this is a half-used name */
+				for (hidups_item = subdriver->hid2nut; hidups_item->info_type != NULL ; hidups_item++) {
+					/* Note: using a shortcut with mapping table and
+					 * its "hidpath" strings here, to avoid stringifying
+					 * all paths known from report descriptor - more so
+					 * in a nested loop. */
+					if (hidups_item->hidpath && hidups_item->hiddata
+					&& !strcasecmp(hidups_item->hidpath, pName)
+					&& hidups_item->hiddata->mapping_handled
+					) {
+						upsdebugx(5, "%s: Path '%s' is half-used: "
+							"Type '%s' was not touched via mapping, "
+							"but '%s' was used",
+							__func__, NUT_STRARG(pName),
+							NUT_STRARG(pType),
+							NUT_STRARG(HIDDataType(hidups_item->hiddata))
+							);
+						pNames = &halfused_names;
+						pCount = &halfused_count;
+						pPrevLen = &halfused_prevlen;
+						pBufSize = &halfused_bufsize;
+						break;
+					}
+				}
+			}
+
+			/* We may overflow the pre-allocated buffer,
+			 * so we loop here until snprintf() succeeds
+			 * or we are known to have failed completely.
+			 */
+			do {
+				retry = 0;
+				if (!*pNames) {
+					break;
+				}
+
+				upsdebugx(5, "%s: adding '%s (%s)' (%" PRIuSIZE " bytes) "
+					"to buffer of %" PRIuSIZE "/%" PRIuSIZE " bytes",
+					__func__, NUT_STRARG(pName), NUT_STRARG(pType),
+					pName ? strlen(pName) : 0,
+					*pPrevLen, *pBufSize);
+
+				ret_printf = snprintf(*pNames + *pPrevLen, *pBufSize - *pPrevLen - 1, "%s%s (%s)",
+					*pCount ? ", " : "", NUT_STRARG(pName), NUT_STRARG(pType));
+
+				upsdebugx(6, "%s: snprintf() returned %d", __func__, ret_printf);
+				(*pNames)[*pBufSize - 1] = '\0';
+
+				if (ret_printf < 0) {
+					upsdebugx(1, "%s: error collecting names, might not report unused descriptor names", __func__);
+				} else if ((size_t)ret_printf + *pPrevLen >= *pBufSize) {
+					if (*pBufSize < SIZE_MAX - LARGEBUF) {
+						*pBufSize = *pBufSize + LARGEBUF;
+						upsdebugx(1, "%s: buffer overflowed, trying to re-allocate as %" PRIuSIZE, __func__, *pBufSize);
+							*pNames = (char *)realloc(*pNames, *pBufSize);
+
+						if (!*pNames) {
+							upsdebugx(1, "%s: buffer overflowed, will not report unused descriptor names", __func__);
+						} else {
+							upsdebugx(5, "%s: buffer overflowed, but reallocated successfully - retrying", __func__);
+							/* Retry this loop */
+							retry = 1;
+						}
+					} else {
+						upsdebugx(1, "%s: buffer overflowed, might not report unused descriptor names", __func__);
+					}
+				} else {
+					*pPrevLen += (size_t)ret_printf;
+				}
+			} while (retry);
+
+			*pCount = *pCount + 1;
+		}
+	}
+
+	if (unused_count) {
+		upsdebugx(1, "%s: %" PRIuSIZE " items are present in the "
+			"report descriptor from HID UPS, but %" PRIuSIZE " "
+			"of them were completely not used by name via the "
+			"mapping defined in the selected NUT subdriver %s: %s",
+			__func__, pDesc->nitems, unused_count,
+			subdriver->name, NUT_STRARG(unused_names));
+	}
+
+	if (halfused_count) {
+		upsdebugx(1, "%s: %" PRIuSIZE " items are present in the "
+			"report descriptor from HID UPS, but %" PRIuSIZE " "
+			"of them have several Types named by same Path value, "
+			"where at least one of the names was used and other(s) "
+			"were not used by the mapping defined in "
+			"the selected NUT subdriver %s: %s",
+			__func__, pDesc->nitems, halfused_count,
+			subdriver->name, NUT_STRARG(halfused_names));
+	}
+
+	if (unused_names)
+		free(unused_names);
+	if (halfused_names)
+		free(halfused_names);
+
+	/* Check that all defined mappings were used? */
+	for (hidups_item = subdriver->hid2nut; hidups_item->info_type != NULL ; hidups_item++) {
+		known_mappings++;
+
+		if (hidups_item && hidups_item->hiddata
+		&& hidups_item->hiddata->mapping_handled
+		) {
+			used_mappings++;
+		}
+	}
+
+	/* We arbitrarily declare that having under 10 known or used
+	 * mappings is few enough to be loud about this */
+	upsdebugx( (known_mappings < 10 || used_mappings < 10) ? 0 : 5,
+		"%s: %" PRIuSIZE " mapping entries are defined, and "
+		"%" PRIuSIZE " were actually used from USB HID report, "
+		"in the selected NUT subdriver %s",
+		__func__, known_mappings, used_mappings,
+		subdriver->name);
+
+	if (known_mappings < 10 || used_mappings < 10)
+		upsdebugx(0, "Please check if there is a newer version of NUT available "
+			"(may be not packaged for your distribution yet), try a custom "
+			"build of development branch to test latest driver code per "
+			"%s/docs/user-manual.chunked/_installation_instructions.html#Installing_inplace, "
+			"and see %s/docs/developer-guide.chunked/new-drivers.html#hid-subdrivers "
+			"for suggestions how you can help improve this driver.",
+			NUT_WEBSITE_BASE, NUT_WEBSITE_BASE);
+}
 
 static subdriver_t *match_function_subdriver_name(int fatal_mismatch) {
 	char	*subdrv = getval("subdriver");
@@ -1087,14 +1277,16 @@ void upsdrv_help(void)
 	size_t i;
 	printf("\nAcceptable values for 'subdriver' via -x or ups.conf "
 		"in this driver (exact names here, case-insensitive "
-		"sub-strings may be used, as well as regular expressions): ");
+		"sub-strings may be used, as well as regular expressions):\n");
 
 	for (i = 0; subdriver_list[i] != NULL; i++) {
-		if (i>0)
-			printf(", ");
-		printf("\"%s\"", subdriver_list[i]->name);
+		printf("\t\"%s\"\n", subdriver_list[i]->name);
 	}
-	printf("\n");
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
 }
 
 void upsdrv_makevartable(void)
@@ -1155,8 +1347,12 @@ void upsdrv_makevartable(void)
 	addvar(VAR_FLAG, "powercom_sdcmd_byte_order_fallback",
 		"Set to use legacy byte order for Powercom HID shutdown commands. Either it was wrong forever, or some older devices/firmwares had it the other way around");
 
+	addvar(VAR_FLAG, "powercom_sdcmd_discrete_delay",
+		"Set to use discrete timing table for Powercom HID shutdown commands (Raptor and Smart KING Pro series)");
+
 #if !((defined SHUT_MODE) && SHUT_MODE)
 	addvar(VAR_VALUE, "subdriver", "Explicit USB HID subdriver selection");
+	addvar(VAR_FLAG, "winhid", "Use the experimental native Windows HID backend instead of libusb (WIN32 only)");
 
 	/* allow -x vendor=X, vendorid=X, product=X, productid=X, serial=X */
 	nut_usb_addvars();
@@ -1184,7 +1380,7 @@ void upsdrv_updateinfo(void)
 {
 	hid_info_t	*item;
 	HIDData_t	*event[MAX_EVENT_NUM], *found_data;
-	int		i, evtCount;
+	int		i, evtCount, reconnecting = (hd == NULL);
 	double		value;
 	time_t		now;
 
@@ -1193,14 +1389,17 @@ void upsdrv_updateinfo(void)
 	time(&now);
 
 	/* check for device availability to set datastale! */
-	if (hd == NULL) {
+	if (reconnecting) {
 		/* don't flood reconnection attempts */
+		int	maylog;
 		if (now < (lastpoll + poll_interval)) {
 			return;
 		}
 
+		maylog = may_log_reconnect_trying(1);
+		reconnect_trying(RECONNECT_TRYING);
 		upsdebugx(1, "Got to reconnect!");
-		if (use_interrupt_pipe == TRUE && interrupt_pipe_EIO_count > 0) {
+		if (use_interrupt_pipe == TRUE && interrupt_pipe_EIO_count > 0 && maylog) {
 			upsdebugx(0, "Reconnecting. If you saw \"nut_libusb_get_interrupt: Input/Output Error\" "
 				"or similar message in the log above, try setting \"pollonly\" flag in \"ups.conf\" "
 				"options section for this driver!");
@@ -1216,11 +1415,15 @@ void upsdrv_updateinfo(void)
 		interrupt_pipe_EIO_count = 0;
 		interrupt_pipe_no_events_count = 0;
 
+		reconnect_trying(RECONNECT_UPDATEINFO);
 		if (hid_ups_walk(HU_WALKMODE_INIT) == FALSE) {
 			hd = NULL;
 			return;
 		}
+
+		/* Claim ultimate RECONNECT_SUCCESS further below */
 	}
+
 #ifdef DEBUG
 	interval();
 #endif
@@ -1255,11 +1458,15 @@ void upsdrv_updateinfo(void)
 		case LIBUSB_ERROR_NO_MEM:    /* Insufficient memory */
 		fallthrough_reconnect:
 			/* Uh oh, got to reconnect! */
+			/* Not accounting just yet with reconnect_trying(RECONNECT_TRYING),
+			 * to avoid off-by-one counter errors */
 			dstate_setinfo("driver.state", "reconnect.trying");
 			hd = NULL;
 			return;
 		case LIBUSB_ERROR_IO:        /* I/O error */
 			/* Uh oh, got to reconnect, with a special suggestion! */
+			/* Not accounting just yet with reconnect_trying(RECONNECT_TRYING),
+			 * to avoid off-by-one counter errors */
 			dstate_setinfo("driver.state", "reconnect.trying");
 			interrupt_pipe_EIO_count++;
 			hd = NULL;
@@ -1312,10 +1519,12 @@ void upsdrv_updateinfo(void)
 
 		ups_infoval_set(item, value);
 	}
+
 #ifdef DEBUG
 	upsdebugx(1, "took %.3f seconds handling interrupt reports...",
 		interval());
 #endif
+
 	/* clear status buffer before beginning */
 	status_init();
 	buzzmode_init();
@@ -1348,10 +1557,15 @@ void upsdrv_updateinfo(void)
 	status_commit();
 
 	dstate_dataok();
+
 #ifdef DEBUG
 	upsdebugx(1, "took %.3f seconds handling feature reports...",
 		interval());
 #endif
+
+	if (reconnecting) {
+		reconnect_trying(RECONNECT_SUCCESS);
+	}
 }
 
 void upsdrv_initinfo(void)
@@ -1361,6 +1575,85 @@ void upsdrv_initinfo(void)
 	upsdebugx(1, "upsdrv_initinfo...");
 
 	dstate_setinfo("driver.version.data", "%s", subdriver->name);
+
+	upsdebugx(1, "%s: Performing an initial UPS data walk with subdriver %s...",
+		__func__, subdriver->name);
+	if (hid_ups_walk(HU_WALKMODE_INIT) == FALSE) {
+		fatalx(EXIT_FAILURE, "Can't initialize data from HID UPS");
+	} else {
+		analyze_mapping_usage();
+	}
+
+	if (!ups_status)
+		upslogx(LOG_WARNING, "%s: No flag bits for 'ups.status' were explicitly reported; "
+			"it is possible a wrong 'subdriver' option was requested or detected "
+			"(in case of problems with device data, consider testing with other "
+			"explicit driver option 'subdriver' values)",
+			__func__);
+
+	upsdebugx(1, "%s: Optionally adjust some threshold values, if applicable and requested to...", __func__);
+
+	/* Set values below from user settings only if supported by UPS */
+	if (dstate_getinfo("battery.charge.low")) {
+		/* Retrieve user defined battery settings */
+		val = getval(HU_VAR_LOWBATT);
+		if (val) {
+			dstate_setinfo("battery.charge.low", "%ld", strtol(val, NULL, 10));
+		}
+	}
+
+	if (dstate_getinfo("ups.delay.start")) {
+		/* Retrieve user defined delay settings */
+		val = getval(HU_VAR_ONDELAY);
+		if (val) {
+			long	l = strtol(val, NULL, 10);
+#if !((defined SHUT_MODE) && SHUT_MODE)
+			if (subdriver == &cps_subdriver
+			 && (l < 60 || l % 60)
+			) {
+				upslogx(LOG_WARNING, "CPS devices tend to round delays by 60 sec down (ondelay=120 is the suggested minimum; see more in the man page)");
+			}
+#endif
+			dstate_setinfo("ups.delay.start", "%ld", l);
+		}
+	}
+
+	if (dstate_getinfo("ups.delay.shutdown")) {
+		/* Retrieve user defined delay settings */
+		val = getval(HU_VAR_OFFDELAY);
+		if (val) {
+			long	l = strtol(val, NULL, 10);
+#if !((defined SHUT_MODE) && SHUT_MODE)
+			if (subdriver == &cps_subdriver
+			 && (l > 0 && (l < 60 || l % 60))
+			) {
+				/* Note: zero and negative values may
+				 * have special meanings for the firmware */
+				upslogx(LOG_WARNING, "CPS devices tend to round delays by 60 sec down (offdelay=60 is the suggested minimum; see more in the man page)");
+			}
+#endif
+			dstate_setinfo("ups.delay.shutdown", "%ld", l);
+		}
+	}
+
+	upsdebugx(1, "%s: Optionally enable instant commands related to shutdown, if applicable...", __func__);
+
+	/* Enable instant commands below only if supported by UPS */
+	if (find_nut_info("load.off.delay")) {
+		/* Adds default with a delay value of '0' (= immediate) */
+		dstate_addcmd("load.off");
+	}
+
+	if (find_nut_info("load.on.delay")) {
+		/* Adds default with a delay value of '0' (= immediate) */
+		dstate_addcmd("load.on");
+	}
+
+	if (find_nut_info("load.off.delay") && find_nut_info("load.on.delay")) {
+		/* Add composite instcmds (require setting multiple HID values) */
+		dstate_addcmd("shutdown.return");
+		dstate_addcmd("shutdown.stayoff");
+	}
 
 	/* init polling frequency for full updates */
 	val = getval(HU_VAR_POLLFREQ);
@@ -1423,12 +1716,34 @@ void upsdrv_initups(void)
 	subdriver_matcher = device_path;
 #else	/* !SHUT_MODE => USB */
 	char *regex_array[USBMATCHER_REGEXP_ARRAY_LIMIT];
-
+	const char *transport_backend;
 	upsdebugx(1, "upsdrv_initups (non-SHUT)...");
+# ifdef WIN32
+	if (testvar("winhid")) {
+		comm_driver = &winhid_subdriver;
+		dstate_setinfo("driver.version.usb", "winhid-%s (Windows HID API)",
+			comm_driver->version);
+		upslogx(LOG_INFO, "Using experimental winhid backend: %s %s",
+			comm_driver->name, comm_driver->version);
+	} else {
+		comm_driver = &usb_subdriver;
+	}
+# else	/* !WIN32 */
+	if (testvar("winhid")) {
+		upslogx(LOG_WARNING, "winhid is only supported on WIN32 builds; ignoring option");
+	}
+	comm_driver = &usb_subdriver;
+# endif	/* WIN32 */
 
-	upsdebugx(2, "Initializing an USB-connected UPS with library %s " \
+	transport_backend = dstate_getinfo("driver.version.usb");
+# ifdef WIN32
+	if (comm_driver == &winhid_subdriver) {
+		transport_backend = "Windows HID API";
+	}
+# endif	/* WIN32 */
+	upsdebugx(2, "Initializing an USB-connected UPS with backend %s " \
 		"(NUT subdriver name='%s' ver='%s')",
-		dstate_getinfo("driver.version.usb"),
+		transport_backend ? transport_backend : "(unknown)",
 		comm_driver->name, comm_driver->version );
 
 	warn_if_bad_usb_port_filename(device_path);
@@ -1508,7 +1823,7 @@ void upsdrv_initups(void)
 	}
 
 	/* Search for the first supported UPS matching the
-	   regular expression (USB) or device_path (SHUT) */
+	 * regular expression (USB) or device_path (SHUT) */
 	ret = comm_driver->open_dev(&udev, &curDevice, subdriver_matcher, &callback);
 	if (ret < 1)
 		fatalx(EXIT_FAILURE, "No matching HID UPS found");
@@ -1664,69 +1979,7 @@ void upsdrv_initups(void)
 		lbrb_log_delay_without_calibrating = 1;
 	}
 
-	if (hid_ups_walk(HU_WALKMODE_INIT) == FALSE) {
-		fatalx(EXIT_FAILURE, "Can't initialize data from HID UPS");
-	}
-
-	/* Set values below from user settings only if supported by UPS */
-	if (dstate_getinfo("battery.charge.low")) {
-		/* Retrieve user defined battery settings */
-		val = getval(HU_VAR_LOWBATT);
-		if (val) {
-			dstate_setinfo("battery.charge.low", "%ld", strtol(val, NULL, 10));
-		}
-	}
-
-	if (dstate_getinfo("ups.delay.start")) {
-		/* Retrieve user defined delay settings */
-		val = getval(HU_VAR_ONDELAY);
-		if (val) {
-			long	l = strtol(val, NULL, 10);
-#if !((defined SHUT_MODE) && SHUT_MODE)
-			if (subdriver == &cps_subdriver
-			 && (l < 60 || l % 60)
-			) {
-				upslogx(LOG_WARNING, "CPS devices tend to round delays by 60 sec down (ondelay=120 is the suggested minimum; see more in the man page)");
-			}
-#endif
-			dstate_setinfo("ups.delay.start", "%ld", l);
-		}
-	}
-
-	if (dstate_getinfo("ups.delay.shutdown")) {
-		/* Retrieve user defined delay settings */
-		val = getval(HU_VAR_OFFDELAY);
-		if (val) {
-			long	l = strtol(val, NULL, 10);
-#if !((defined SHUT_MODE) && SHUT_MODE)
-			if (subdriver == &cps_subdriver
-			 && (l > 0 && (l < 60 || l % 60))
-			) {
-				/* Note: zero and negative values may
-				 * have special meanings for the firmware */
-				upslogx(LOG_WARNING, "CPS devices tend to round delays by 60 sec down (offdelay=60 is the suggested minimum; see more in the man page)");
-			}
-#endif
-			dstate_setinfo("ups.delay.shutdown", "%ld", l);
-		}
-	}
-
-	/* Enable instant commands below only if supported by UPS */
-	if (find_nut_info("load.off.delay")) {
-		/* Adds default with a delay value of '0' (= immediate) */
-		dstate_addcmd("load.off");
-	}
-
-	if (find_nut_info("load.on.delay")) {
-		/* Adds default with a delay value of '0' (= immediate) */
-		dstate_addcmd("load.on");
-	}
-
-	if (find_nut_info("load.off.delay") && find_nut_info("load.on.delay")) {
-		/* Add composite instcmds (require setting multiple HID values) */
-		dstate_addcmd("shutdown.return");
-		dstate_addcmd("shutdown.stayoff");
-	}
+	upsdebugx(1, "%s: finished", __func__);
 }
 
 void upsdrv_cleanup(void)
@@ -1759,10 +2012,11 @@ void possibly_supported(const char *mfr, HIDDevice_t *arghd)
 {
 	upsdebugx(0,
 "This %s device (%04x:%04x) is not (or perhaps not yet) supported\n"
-"by usbhid-ups. Please make sure you have an up-to-date version of NUT. If\n"
-"this does not fix the problem, try running the driver with the\n"
-"'-x productid=%04x' option. Please report your results to the NUT user's\n"
-"mailing list <nut-upsuser@lists.alioth.debian.org>.\n",
+"by usbhid-ups. Please make sure you have an up-to-date version of NUT.\n"
+"If this does not fix the problem, try running the driver with the\n"
+"'-x productid=%04x' option, or iterate with explicit '-x subdriver=...'\n"
+"option. Please report your results to the NUT user's mailing list\n"
+"at <nut-upsuser@lists.alioth.debian.org>.\n",
 	mfr, arghd->VendorID, arghd->ProductID, arghd->ProductID);
 
 	if (arghd->VendorID == 0x06da) {
@@ -1779,6 +2033,18 @@ static void process_boolean_info(const char *nutvalue)
 	int clear = 0;
 
 	upsdebugx(5, "process_boolean_info: %s", nutvalue);
+
+	/* Only neuter the other if we know the opposite to be true */
+	if (!strcmp(nutvalue, "online"))
+		process_boolean_info("!offline");
+	else if (!strcmp(nutvalue, "offline"))
+		process_boolean_info("!online");
+
+	/* Similarly for (NOT)FULLYCHARGED status that not all devices report */
+	if (!strcmp(nutvalue, "fullycharged"))
+		process_boolean_info("!notfullycharged");
+	else if (!strcmp(nutvalue, "notfullycharged"))
+		process_boolean_info("!fullycharged");
 
 	if (*nutvalue == '!') {
 		nutvalue++;
@@ -1801,6 +2067,10 @@ static void process_boolean_info(const char *nutvalue)
 
 	upsdebugx(5, "Warning: %s not in list of known values", nutvalue);
 }
+
+/* Winhid report descriptor canonicalization has been moved to libwinhid.c.
+ * The public entry point winhid_canonicalize_parsed_report_desc() is
+ * declared in libwinhid.h and called from callback() below. */
 
 static int callback(
 	hid_dev_handle_t argudev,
@@ -1846,6 +2116,12 @@ static int callback(
 		return 0;
 	}
 
+#if !((defined SHUT_MODE) && SHUT_MODE) && defined WIN32
+	if (comm_driver == &winhid_subdriver) {
+		(void)winhid_canonicalize_parsed_report_desc(pDesc);
+	}
+#endif
+
 	/* prepare report buffer */
 	free_report_buffer(reportbuf);
 	reportbuf = new_report_buffer(pDesc);
@@ -1868,7 +2144,7 @@ static int callback(
 	}
 
 	if (!subdriver) {
-		upsdebugx(1, "Manufacturer not supported!");
+		upsdebugx(1, "Manufacturer or model not supported!");
 		return 0;
 	}
 
@@ -1877,6 +2153,10 @@ static int callback(
 	if (subdriver->fix_report_desc(arghd, pDesc)) {
 		upsdebugx(2, "Report Descriptor Fixed");
 	}
+	upsdebugx(1, "%s: calling HIDDumpTree(); in case of problems with device data "
+		"please note that a wrong subdriver could have been chosen above; "
+		"consider testing others with an explicit driver option",
+		__func__);
 	HIDDumpTree(udev, arghd, subdriver->utab);
 
 #if !((defined SHUT_MODE) && SHUT_MODE)
@@ -1954,6 +2234,8 @@ static bool_t hid_ups_walk(walkmode_t mode)
 	hid_info_t	*item;
 	double		value;
 	int		retcode;
+	int		items_polled = 0;    /* Poll attempts on mapped HID objects */
+	int		items_succeeded = 0; /* Track successful polls to detect total failure */
 
 #if !((defined SHUT_MODE) && SHUT_MODE)
 	/* extract the VendorId for further testing */
@@ -2102,7 +2384,7 @@ static bool_t hid_ups_walk(walkmode_t mode)
 			 */
 		default:
 			fatalx(EXIT_FAILURE, "hid_ups_walk: unknown update mode!");
-		}
+		}	/* end of: switch(mode) */
 #ifdef __clang__
 # pragma clang diagnostic pop
 #endif
@@ -2118,6 +2400,11 @@ static bool_t hid_ups_walk(walkmode_t mode)
 			}
 		}
 #endif	/* !SHUT_MODE => USB */
+
+		if (item->hiddata == NULL) {
+			continue;
+		}
+		items_polled++;
 
 		retcode = HIDGetDataValue(udev, item->hiddata, &value, poll_interval);
 
@@ -2139,18 +2426,26 @@ static bool_t hid_ups_walk(walkmode_t mode)
 		case LIBUSB_ERROR_NO_MEM:    /* Insufficient memory */
 		fallthrough_reconnect:
 			/* Uh oh, got to reconnect! */
+			/* Not accounting just yet with reconnect_trying(RECONNECT_TRYING),
+			 * to avoid off-by-one counter errors */
 			dstate_setinfo("driver.state", "reconnect.trying");
 			hd = NULL;
 			return FALSE;
 
 		case LIBUSB_ERROR_IO:        /* I/O error */
-			/* Uh oh, got to reconnect, with a special suggestion! */
-			dstate_setinfo("driver.state", "reconnect.trying");
+			/* Some devices have firmware bugs causing transient I/O errors
+			 * on specific HID reports. Rather than triggering expensive
+			 * reconnects, skip the failing report and continue. If device
+			 * is truly disconnected, other error codes will catch it, or
+			 * all polls fail and safety check below triggers reconnect. */
+			upsdebugx(3, "Got LIBUSB_ERROR_IO on item '%s' ReportID=0x%02x - skipping",
+				item->info_type ? item->info_type : "(null)",
+				item->hiddata ? item->hiddata->ReportID : 0xFFU);
 			interrupt_pipe_EIO_count++;
-			hd = NULL;
-			return FALSE;
+			continue;
 
 		case 1:
+			items_succeeded++; /* Count successful data retrieval */
 			break;	/* Found! */
 
 		case 0:
@@ -2168,7 +2463,7 @@ static bool_t hid_ups_walk(walkmode_t mode)
 		case LIBUSB_ERROR_PIPE:      /* Broken pipe */
 		default:
 			/* Don't know what happened, try again later... */
-		   upsdebugx(1, "HIDGetDataValue unknown retcode '%i'", retcode);
+			upsdebugx(1, "HIDGetDataValue unknown retcode '%i'", retcode);
 			continue;
 		}
 
@@ -2220,6 +2515,37 @@ static bool_t hid_ups_walk(walkmode_t mode)
 		}
 	}
 
+	/* Experimental WIN32 HID backend can expose enough data for full polling
+	 * while still missing some quick-poll path mappings (notably status bits)
+	 * due descriptor synthesis limitations. In poll-only mode, if quick update
+	 * has nothing mapped to poll, fall back to a full walk. */
+#if !((defined SHUT_MODE) && SHUT_MODE) && defined WIN32
+	if (mode == HU_WALKMODE_QUICK_UPDATE
+	 && !use_interrupt_pipe
+	 && comm_driver == &winhid_subdriver
+	 && items_polled == 0
+	) {
+		upsdebugx(2, "%s: no quick-poll mappings with winhid/pollonly; falling back to full update", __func__);
+		return hid_ups_walk(HU_WALKMODE_FULL_UPDATE);
+	}
+#endif
+
+	/* Safety check: if we got zero successful polls during update,
+	 * device may be truly disconnected (not just transient errors).
+	 * Skip this check during INIT mode where failures are expected.
+	 * Also skip when there were no mapped items to poll in this mode. */
+	if (items_polled > 0
+	 && items_succeeded == 0
+	 && (mode == HU_WALKMODE_QUICK_UPDATE || mode == HU_WALKMODE_FULL_UPDATE)
+	) {
+		upsdebugx(1, "Got zero successful data polls - device may be disconnected");
+		/* Not accounting just yet with reconnect_trying(RECONNECT_TRYING),
+		 * to avoid off-by-one counter errors */
+		dstate_setinfo("driver.state", "reconnect.trying");
+		hd = NULL;
+		return FALSE;
+	}
+
 	return TRUE;
 }
 
@@ -2229,6 +2555,8 @@ static int reconnect_ups(void)
 	char	*val;
 	int wait_before_reconnect = 0;
 
+	/* NOTE: Not calling reconnect_trying() counters/loggers here,
+	 * as our caller upsdrv_updateinfo() does it */
 	dstate_setinfo("driver.state", "reconnect.trying");
 
 	/* Init time to wait before trying to reconnect (seconds) */
@@ -2260,10 +2588,16 @@ static int reconnect_ups(void)
 	ret = comm_driver->open_dev(&udev, &curDevice, subdriver_matcher, NULL);
 	upsdebugx(4, "Opening comm_driver returns ret=%i", ret);
 	if (ret > 0) {
+		/* NOTE: Not calling reconnect_trying() counters/loggers here,
+		 * as our caller upsdrv_updateinfo() does it. Notably, it will
+		 * "RECONNECT_UPDATEINFO" just after this success before handing
+		 * off the data to ultimate consumers. */
+		upsdebugx(0, "Device has been reconnected");
+		dstate_setinfo("driver.state", "quiet");
 		return 1;
 	}
 
-	dstate_setinfo("driver.state", "quiet");
+	upsdebugx(1, "Device has not been reconnected");
 	return 0;
 }
 
@@ -2388,9 +2722,35 @@ static void ups_status_set(void)
 		onlinedischarge_log_throttle_charge = -1;
 	}
 
-	if (!(ups_status & STATUS(ONLINE))) {
+	if ((ups_status & STATUS(OFFLINE))) {
 		status_set("OB");		/* on battery */
+		if ((ups_status & STATUS(ONLINE))) {
+			upsdebugx(1,
+				"%s: seems that UPS [%s] reports both online and on-battery "
+				"power states at the same time",
+				__func__, upsname);
+		}
+	}
+
+	if (!(ups_status & STATUS(ONLINE))) {
+		if ((ups_status & STATUS(OFFLINE))) {
+			status_set("OB");		/* on battery */
+		} else {
+			if ((ups_status & STATUS(DISCHRG))) {
+				upsdebugx(1,
+					"%s: seems that UPS [%s] does not report a power state, "
+					"but it is discharging - assuming it is on battery now",
+					__func__, upsname);
+
+				status_set("OB");
+			} else {
+				upsdebugx(1,
+					"%s: seems that UPS [%s] does not report a power state",
+					__func__, upsname);
+			}
+		}
 	} else if ((ups_status & STATUS(DISCHRG))) {
+		/* We are known to be online AND discharging... */
 		int	do_logmsg = 0, current_charge = 0;
 
 		/* if online but discharging */
@@ -2530,26 +2890,40 @@ static void ups_status_set(void)
 			}
 
 			upslogx(LOG_WARNING, "%s: seems that UPS [%s] is in OL+DISCHRG state now. %s"
-			"Is it calibrating (perhaps you want to set 'onlinedischarge_calibration' option)? "
-			"Note that some UPS models (e.g. CyberPower UT series) emit OL+DISCHRG when "
-			"in fact offline/on-battery (perhaps you want to set 'onlinedischarge_onbattery' option).",
-			__func__, upsname, msg_charge);
+				"Is it calibrating (perhaps you want to set 'onlinedischarge_calibration' option)? "
+				"Note that some UPS models (e.g. CyberPower UT series) emit OL+DISCHRG when "
+				"in fact offline/on-battery (perhaps you want to set 'onlinedischarge_onbattery' option).",
+				__func__, upsname, msg_charge);
 		}
 	} else if ((ups_status & STATUS(ONLINE))) {
-		/* if simply online */
+		/* we get here if simply online, not discharging */
 		status_set("OL");
 	}
 
 	isCalibrating = status_get("CAL");
 
-	if ((ups_status & STATUS(DISCHRG)) &&
-		!(ups_status & STATUS(DEPLETED))) {
+	if ((ups_status & STATUS(DISCHRG))
+	&& !(ups_status & STATUS(DEPLETED))
+	) {
 		status_set("DISCHRG");		/* discharging */
 	}
-	if ((ups_status & STATUS(CHRG)) &&
-		!(ups_status & STATUS(FULLYCHARGED))) {
-		status_set("CHRG");		/* charging */
+
+	if (ups_status & STATUS(CHRG)) {
+		if (ups_status & STATUS(NOTFULLYCHARGED)) {
+			/* Device reports this status, else below... */
+			status_set("CHRG");		/* charging */
+		} else if (!(ups_status & STATUS(FULLYCHARGED)) && !(ups_status & STATUS(NOTFULLYCHARGED))) {
+			/* Device does not report this status at all */
+			const char	*s;
+			if ((s = dstate_getinfo("battery.charge"))) {
+				/* NOTE: exact "0" may mean a conversion error: */
+				int	current_charge = atoi(s);
+				if (current_charge > 0 && current_charge < 100)
+					status_set("CHRG");		/* charging */
+			}
+		}
 	}
+
 	if (ups_status & (STATUS(LOWBATT) | STATUS(TIMELIMITEXP) | STATUS(SHUTDOWNIMM))) {
 		if (lbrb_log_delay_sec < 1
 		|| (!isCalibrating && !lbrb_log_delay_without_calibrating)
@@ -2575,9 +2949,11 @@ static void ups_status_set(void)
 	} else {
 		last_lb_start = 0;
 	}
+
 	if (ups_status & STATUS(OVERLOAD)) {
 		status_set("OVER");		/* overload */
 	}
+
 	if ((ups_status & STATUS(REPLACEBATT)) || (ups_status & STATUS(NOBATTERY))) {
 		if (lbrb_log_delay_sec < 1
 		|| (!isCalibrating && !lbrb_log_delay_without_calibrating)
@@ -2604,25 +2980,31 @@ static void ups_status_set(void)
 	} else {
 		last_rb_start = 0;
 	}
+
 	if (ups_status & STATUS(TRIM)) {
 		status_set("TRIM");		/* SmartTrim */
 	}
+
 	if (ups_status & STATUS(BOOST)) {
 		status_set("BOOST");		/* SmartBoost */
 	}
+
 	if (ups_status & (STATUS(BYPASSAUTO) | STATUS(BYPASSMAN))) {
 		status_set("BYPASS");		/* on bypass */
 	}
+
 	if (ups_status & STATUS(ECOMODE)) {
 		buzzmode_set("vendor:default:ECO");	/* on ECO(HE) Mode,
 						 * should not happen
 						 * via ups.status anymore */
 	}
+
 	if (ups_status & STATUS(ESSMODE)) {
 		buzzmode_set("vendor:default:ESS");	/* on ESS Mode,
 						 * should not happen
 						 * via ups.status anymore */
 	}
+
 	if (ups_status & STATUS(OFF)) {
 		status_set("OFF");		/* ups is off */
 	}
@@ -2775,16 +3157,33 @@ static const char *hu_find_infoval(info_lkp_t *hid2info, const double value)
 /* return -1 on failure, 0 for a status update and 1 in all other cases */
 static int ups_infoval_set(hid_info_t *item, double value)
 {
-	const char	*nutvalue;
+	const char	*nutvalue = NULL;
+	const char	*pType = (nut_debug_level > 0 && item->hiddata) ? HIDDataType(item->hiddata) : NULL;
 
 	/* need lookup'ed translation? */
-	if (item->hid2info != NULL){
-
+	if (item->hid2info != NULL) {
 		if ((nutvalue = hu_find_infoval(item->hid2info, value)) == NULL) {
-			upsdebugx(5, "Lookup [%g] failed for [%s]", value, item->info_type);
+			upsdebugx(5, "%s: Lookup [%g] failed for [%s]", __func__, value, item->info_type);
 			return -1;
 		}
+		/* clause continued below after this message... */
+	}
 
+	if (item->hiddata != NULL) {
+		if (!item->hiddata->mapping_handled) {
+			upsdebugx(5, "%s: setting report descriptor mapping for '%s' (%s) as handled",
+				__func__, NUT_STRARG(item->hidpath), NUT_STRARG(pType));
+			item->hiddata->mapping_handled = TRUE;
+		} else {
+			upsdebugx(5, "%s: report descriptor mapping for '%s' (%s) was already set as handled",
+				__func__, NUT_STRARG(item->hidpath), NUT_STRARG(pType));
+		}
+	} else {
+		upsdebugx(5, "%s: got no report descriptor mapping for '%s'",
+			__func__, NUT_STRARG(item->hidpath));
+	}
+
+	if (nutvalue != NULL) {
 		/* deal with boolean items */
 		if (!strncmp(item->info_type, "BOOL", 4)) {
 			process_boolean_info(nutvalue);

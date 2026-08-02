@@ -4,7 +4,8 @@
  * Copyright (C) 1999  Russell Kroll <rkroll@exploits.org>
  *           (C) 2000  Nigel Metheringham <Nigel.Metheringham@Intechnology.co.uk>
  *           (C) 2011+ Michal Soltys <soltys@ziu.info>
- *           (C) 2024  Jim Klimov <jimklimov+nut@gmail.com>
+ *           (C) 2024-2026  Jim Klimov <jimklimov+nut@gmail.com>
+ * 			 (C) 2026  Owen Li <geek@geeking.moe>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -37,7 +38,7 @@
 #include "apcsmart_tabs.h"
 
 #define DRIVER_NAME	"APC Smart protocol driver"
-#define DRIVER_VERSION	"3.36"
+#define DRIVER_VERSION	"3.40"
 
 #ifdef WIN32
 # ifndef ECANCELED
@@ -51,7 +52,8 @@ upsdrv_info_t upsdrv_info = {
 	DRIVER_VERSION,
 	"Russell Kroll <rkroll@exploits.org>\n"
 	"Nigel Metheringham <Nigel.Metheringham@Intechnology.co.uk>\n"
-	"Michal Soltys <soltys@ziu.info>",
+	"Michal Soltys <soltys@ziu.info>\n"
+	"Owen Li <geek@geeking.moe>",
 	DRV_STABLE,
 	{ &apc_tab_info, NULL }
 };
@@ -95,10 +97,13 @@ static apc_vartab_t *vt_lookup_char(char cmdchar)
 {
 	int	i;
 
-	for (i = 0; apc_vartab[i].name != NULL; i++)
-		if ((apc_vartab[i].flags & APC_PRESENT) &&
-		    apc_vartab[i].cmd == cmdchar)
+	for (i = 0; apc_vartab[i].name != NULL; i++) {
+		if ((apc_vartab[i].flags & APC_PRESENT)
+		 && apc_vartab[i].cmd == cmdchar
+		) {
 			return &apc_vartab[i];
+		}
+	}
 
 	return NULL;
 }
@@ -472,7 +477,7 @@ static ssize_t apc_read_i(char *buf, size_t buflen, int flags, const char *fn, u
 		fatalx (EXIT_FAILURE, "Error: apc_read_i called with buflen too large");
 	}
 
-	if (INVALID_FD(upsfd))
+	if (INVALID_FD_SER(upsfd))
 		return 0;
 
 	if (flags & SER_D0) {
@@ -600,7 +605,7 @@ static ssize_t apc_write_i(unsigned char code, const char *fn, unsigned int ln)
 	ssize_t ret;
 	errno = 0;
 
-	if (INVALID_FD(upsfd))
+	if (INVALID_FD_SER(upsfd))
 		return 0;
 
 	ret = ser_send_char(upsfd, code);
@@ -705,7 +710,7 @@ static void apc_dstate_delinfo(apc_vartab_t *vt, int skip)
 		return;
 	}
 
-	if ( !(name = xmalloc(sizeof(char) * vt->nlen0)) ) {
+	if ( !(name = (char *)xmalloc(sizeof(char) * vt->nlen0)) ) {
 		upslogx(LOG_ERR, "apc_dstate_delinfo() failed to allocate buffer");
 		return;
 	}
@@ -737,12 +742,12 @@ static void apc_dstate_setinfo(apc_vartab_t *vt, const char *upsval)
 		return;
 	}
 
-	if ( !(name = xmalloc(sizeof(char) * vt->nlen0)) ) {
+	if ( !(name = (char *)xmalloc(sizeof(char) * vt->nlen0)) ) {
 		upslogx(LOG_ERR, "apc_dstate_setinfo() failed to allocate buffer");
 		return;
 	}
 
-	if ( !(temp = xmalloc(sizeof(char) * (upsvallen + 2))) ) {
+	if ( !(temp = (char *)xmalloc(sizeof(char) * (upsvallen + 2))) ) {
 		/* +2 seems like an overkill, but helps hush compiler warnings */
 		upslogx(LOG_ERR, "apc_dstate_setinfo() failed to allocate buffer");
 		free(name);
@@ -1133,6 +1138,74 @@ static void legacy_verify(const char *var)
 	}
 }
 
+/*
+ * Dual-byte command support for SPM series and similar UPS models.
+ * These functions handle multi-byte commands encoded in the command set
+ * response as: prefix + 0x3A (colon) + sub-command bytes.
+ */
+
+static void protocol_verify_dual(unsigned char prefix, unsigned char sub)
+{
+	int i;
+	apc_vartab_dual_t *vt;
+
+	for (i = 0; apc_vartab_dual[i].name != NULL; i++) {
+		vt = &apc_vartab_dual[i];
+		if (vt->prefix == prefix && vt->sub == sub) {
+			vt->flags |= APC_PRESENT;
+			upsdebugx(1, "%s: dual cmd [0x%02X 0x%02X] -> %s supported",
+				__func__, prefix, sub, vt->name);
+		}
+	}
+}
+
+static void parse_cmdchars_dual(const unsigned char *data, size_t len)
+{
+	size_t j;
+	unsigned char dual_prefix = 0;
+
+	for (j = 0; j < len; j++) {
+		/* detect prefix:subcmds pattern (byte followed by 0x3A colon) */
+		if (j + 1 < len && data[j + 1] == 0x3A) {
+			dual_prefix = data[j];
+			upsdebugx(1, "%s: found dual-byte prefix 0x%02X",
+				__func__, dual_prefix);
+			continue;
+		}
+		if (data[j] == 0x3A)
+			continue;	/* skip literal colon separator */
+		if (dual_prefix)
+			protocol_verify_dual(dual_prefix, data[j]);
+	}
+}
+
+static int poll_data_dual(apc_vartab_dual_t *vt)
+{
+	char temp[APC_LBUF];
+	unsigned char cmd[2];
+
+	if (!(vt->flags & APC_PRESENT))
+		return 1;	/* not present - skip immediately, no I/O */
+
+	cmd[0] = vt->prefix;
+	cmd[1] = vt->sub;
+
+	upsdebugx(1, "%s: %s [0x%02X 0x%02X]", __func__,
+		vt->name, cmd[0], cmd[1]);
+
+	apc_flush(SER_AA);
+	if (ser_send_buf(upsfd, cmd, 2) <= 0)
+		return 0;
+	if (apc_read(temp, sizeof(temp), SER_AA) < 1)
+		return 0;
+
+	if (!strcmp(temp, "NA"))
+		return 1;
+
+	dstate_setinfo(vt->name, "%s", temp);
+	return 1;
+}
+
 static void protocol_verify(unsigned char cmd)
 {
 	int i, found;
@@ -1352,6 +1425,33 @@ static int getbaseinfo(void)
 	for (i = 0; i < strlen(cmds); i++)
 		protocol_verify((const unsigned char)cmds[i]);
 	deprecate_vars();
+
+	/* parse dual-byte command extensions if present (e.g. SPM series) */
+	if (tail && *(tail + 1)) {
+		upsdebugx(1, "%s: parsing dual-byte command extensions",
+			__func__);
+		parse_cmdchars_dual((const unsigned char *)(tail + 1),
+			strlen(tail + 1));
+
+		/* if dual input.frequency exists, remap F to output.frequency */
+		for (i = 0; apc_vartab_dual[i].name != NULL; i++) {
+			if (apc_vartab_dual[i].prefix == 0x9F &&
+			    apc_vartab_dual[i].sub == 0xD3 &&
+			    (apc_vartab_dual[i].flags & APC_PRESENT)) {
+				unsigned int k;
+				for (k = 0; apc_vartab[k].name != NULL; k++) {
+					if (apc_vartab[k].cmd == 'F' &&
+					    !strcmp(apc_vartab[k].name, "input.frequency")) {
+						apc_vartab[k].name = "output.frequency";
+						upsdebugx(1, "%s: remapped F -> output.frequency",
+							__func__);
+						break;
+					}
+				}
+				break;
+			}
+		}
+	}
 
 	/* if capabilities are supported, add them here */
 	if (strchr(cmds, APC_CAPS)) {
@@ -1583,7 +1683,7 @@ static int sdcmd_AT(const void *str)
 {
 	ssize_t ret;
 	size_t cnt, padto, i;
-	const char *awd = str;
+	const char *awd = (const char *)str;
 	char temp[APC_SBUF], *ptr;
 
 	memset(temp, '\0', sizeof(temp));
@@ -1795,6 +1895,16 @@ static int update_info(int all)
 
 		if (!poll_data(&apc_vartab[i])) {
 			upsdebugx(1, "%s: %s", __func__, "aborting scan");
+			return 0;
+		}
+	}
+
+	/* poll dual-byte variables (skipped instantly if none are APC_PRESENT) */
+	for (i = 0; apc_vartab_dual[i].name != NULL; i++) {
+		if (!all && !(apc_vartab_dual[i].flags & APC_POLL))
+			continue;
+		if (!poll_data_dual(&apc_vartab_dual[i])) {
+			upsdebugx(1, "%s: %s", __func__, "dual cmd scan abort");
 			return 0;
 		}
 	}
@@ -2080,9 +2190,11 @@ static int instcmd(const char *cmd, const char *ext)
 	}
 
 	if (!(ct->flags & APC_PRESENT)) {
-		upslogx(LOG_INSTCMD_INVALID, "%s: command [%s %s] recognized, but"
-		       " not supported by your UPS model", __func__, cmd,
-				ext ? ext : "\b");
+		upslogx(LOG_INSTCMD_INVALID,
+			"%s: command [%s %s] recognized, but"
+			" not supported by your UPS model",
+			__func__, cmd,
+			ext ? ext : "\b");
 		return STAT_INSTCMD_INVALID;
 	}
 
@@ -2154,13 +2266,13 @@ void upsdrv_makevartable(void)
 	addvar(VAR_VALUE, "cshdelay", "CS hack delay");
 }
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
 void upsdrv_help(void)
 {
-	printf(
-		"\nFor detailed information, please refer to:\n"
-		  " - apcsmart(8)\n"
-		  " - https://www.networkupstools.org/docs/man/apcsmart.html\n"
-	      );
 }
 
 void upsdrv_initups(void)
@@ -2189,6 +2301,13 @@ void upsdrv_initups(void)
 	}
 
 	upsfd = extrafd = ser_open(device_path);
+
+	if (INVALID_FD_SER(upsfd)) {
+		upslogx(LOG_WARNING, "%s: failed to open %s",
+			__func__, device_path);
+		/* \todo: Deal with the failure */
+	}
+
 	apc_ser_set();
 
 	/* fill length values */
@@ -2200,7 +2319,7 @@ void upsdrv_cleanup(void)
 {
 	char temp[APC_LBUF];
 
-	if (INVALID_FD(upsfd))
+	if (INVALID_FD_SER(upsfd))
 		return;
 
 	apc_flush(0);
@@ -2208,6 +2327,7 @@ void upsdrv_cleanup(void)
 	apc_write(APC_GODUMB);
 	apc_read(temp, sizeof(temp), SER_TO);
 	ser_close(upsfd, device_path);
+	upsfd = ERROR_FD_SER;
 }
 
 void upsdrv_initinfo(void)
@@ -2282,8 +2402,9 @@ void upsdrv_updateinfo(void)
 
 		/* become aggressive after a few tries */
 		if (!(last_worked % 60)) {
-			upslogx(LOG_WARNING, "Trying to reconnect to the UPS");
-			dstate_setinfo("driver.state", "reconnect.trying");
+			upsdebugx(1, "%s: Trying to reconnect to the UPS", __func__);
+
+			reconnect_trying(RECONNECT_TRYING);
 
 			upsdebugx(1, "%s: call upsdrv_cleanup", __func__);
 			/* dstate_setinfo("driver.state", "cleanup.upsdrv"); */
@@ -2300,12 +2421,18 @@ void upsdrv_updateinfo(void)
 			/* dstate_setinfo("driver.state", "init.info"); */
 			upsdrv_initinfo();
 
+			if (INVALID_FD_SER(upsfd)) {
+				upsdebugx(1, "%s: upsfd remains invalid", __func__);
+				dstate_datastale();
+				return;
+			}
+
+			reconnect_trying(RECONNECT_UPDATEINFO);
 			upsdebugx(1, "%s: call upsdrv_updateinfo", __func__);
-			dstate_setinfo("driver.state", "reconnect.updateinfo");
 			/* dstate_setinfo("driver.state", "init.updateinfo"); */
 			upsdrv_updateinfo();
 
-			dstate_setinfo("driver.state", "init.quiet");
+			reconnect_trying(RECONNECT_SUCCESS);
 		}
 
 		upsdebugx(1, "%s: nudging UPS with 'Y', iteration #%d ...",

@@ -55,7 +55,7 @@
 #endif
 
 #define DRIVER_NAME	"NUT Huawei UPS2000 (1kVA-3kVA) RS-232 Modbus driver (libmodbus link type: " NUT_MODBUS_LINKTYPE_STR ")"
-#define DRIVER_VERSION	"0.10"
+#define DRIVER_VERSION	"0.13"
 
 #define CHECK_BIT(var,pos) ((var) & (1<<(pos)))
 #define MODBUS_SLAVE_ID 1
@@ -192,7 +192,7 @@ upsdrv_info_t upsdrv_info = {
 	DRIVER_NAME,
 	DRIVER_VERSION,
 	"Yifeng Li <tomli@tomli.me>\n",
-	DRV_EXPERIMENTAL,
+	DRV_BETA,
 	{ NULL }
 };
 
@@ -247,11 +247,6 @@ void upsdrv_initups(void)
 	if (r < 0) {
 		modbus_free(modbus_ctx);
 		fatalx(EXIT_FAILURE, "Invalid slave ID %d", MODBUS_SLAVE_ID);
-	}
-
-	if (modbus_connect(modbus_ctx) == -1) {
-		modbus_free(modbus_ctx);
-		fatalx(EXIT_FAILURE, "modbus_connect: unable to connect: %s", modbus_strerror(errno));
 	}
 }
 
@@ -473,6 +468,7 @@ void upsdrv_initinfo(void)
 {
 	bool in_list = 0;
 	int i = 0;
+	int r;
 
 	upsdebugx(2, "upsdrv_initinfo");
 
@@ -515,6 +511,25 @@ void upsdrv_initinfo(void)
 	/* instant commands */
 	ups2000_init_instcmd();
 	upsh.instcmd = instcmd;
+
+	/*
+	 * The raw serial port is only used for device identification.
+	 * Close it before switching to libmodbus.
+	 */
+	r = ser_close(upsfd, device_path);
+	upsfd = ERROR_FD;  /* invalidate the closed upsfd */
+	if (r != 0) {
+		fatalx(EXIT_FAILURE, "ser_close() failed (%d, errno %d): %s",
+			r, errno, strerror(errno));
+	}
+
+	r = modbus_connect(modbus_ctx);
+	if (r != 0) {
+		modbus_free(modbus_ctx);
+		fatalx(EXIT_FAILURE, "modbus_connect() failed (%d, errno %d): %s",
+			r, errno, modbus_strerror(errno));
+	}
+	upslogx(LOG_INFO, "modbus_connect() succeeds");
 }
 
 
@@ -733,8 +748,8 @@ static int ups2000_update_status(void)
 			 * if the register is equal to the "val" we are looking
 			 * for, or if register has its n-th "bit" set...
 			 */
-			if ((flag[j].val != -1 && flag[j].val == val) ||
-			    (flag[j].bit != -1 && CHECK_BIT(val, flag[j].bit))
+			if ((flag[j].val != -1 && flag[j].val == val)
+			 || (flag[j].bit != -1 && CHECK_BIT(val, flag[j].bit))
 			) {
 				/* if it has a corresponding status flag */
 				if (strlen(flag[j].status_name) != 0)
@@ -968,7 +983,7 @@ static int ups2000_update_alarm(void)
 
 			alarm_count++;
 
-			gotlen = snprintf(alarm_buf, 128, "(ID %02d/%02d): %s!",
+			gotlen = snprintf(alarm_buf, sizeof(alarm_buf), "(ID %02d/%02d): %s!",
 				ups2000_alarm[i].alarm_id,
 				ups2000_alarm[i].alarm_cause_id,
 				ups2000_alarm[i].alarm_name);
@@ -987,8 +1002,8 @@ static int ups2000_update_alarm(void)
 			 * Log the warning only if it's a new alarm, or if a long time
 			 * has paseed since we first warned it.
 			 */
-			if (!ups2000_alarm[i].active ||
-			    difftime(now, alarm_logged_since) >= UPS2000_LOG_INTERVAL
+			if (!ups2000_alarm[i].active
+			 || difftime(now, alarm_logged_since) >= UPS2000_LOG_INTERVAL
 			) {
 				int loglevel;
 				const char *alarm_word;
@@ -1058,7 +1073,7 @@ static int ups2000_update_alarm(void)
 
 	if (alarm_count > 0) {
 		/* append this to the alarm string as a friendly reminder */
-		int gotlen = snprintf(alarm_buf, 128, "Check log for details!");
+		int gotlen = snprintf(alarm_buf, sizeof(alarm_buf), "Check log for details!");
 
 		if (gotlen < 0 || (uintmax_t)gotlen > SIZE_MAX) {
 			fatalx(EXIT_FAILURE, "alarm_buf preparation over/under-flow!");
@@ -1070,8 +1085,9 @@ static int ups2000_update_alarm(void)
 		/* if the alarm string is too long, replace it with this */
 		if (all_alarms_len + 1 > ST_MAX_VALUE_LEN) {
 			alarm_init();  /* discard all original alarms */
-			snprintf(alarm_buf, 128, "UPS has %d alarms in effect, "
-						 "check log for details!", alarm_count);
+			snprintf(alarm_buf, sizeof(alarm_buf),
+				"UPS has %d alarms in effect, "
+				"check log for details!", alarm_count);
 			alarm_set(alarm_buf);
 		}
 
@@ -1349,11 +1365,12 @@ static void ups2000_delay_get(void)
 			if (cmdline) {
 				r = ups2000_delay_set(delay->name, cmdline);
 				if (r != STAT_SET_HANDLED) {
-					upslogx(LOG_ERR, "servar: %s is invalid. "
-							 "Reverting to default %s %d seconds",
-							 delay->varname_cmdline,
-							 delay->varname_cmdline,
-							 delay->dfault);
+					upslogx(LOG_ERR,
+						"servar: %s is invalid. "
+						"Reverting to default %s %d seconds",
+						delay->varname_cmdline,
+						delay->varname_cmdline,
+						delay->dfault);
 					*delay->global_var = delay->dfault;
 				}
 			}
@@ -1575,15 +1592,17 @@ static int ups2000_instcmd_load_on(const uint16_t reg)
 		 * normal/bypass status. Also log an error and suggest "bypass.stop".
 		 */
 		/* FIXME: ..._INVALID ? */
-		upslogx(LOG_INSTCMD_FAILED, "load.on error: UPS is already on, and is in bypass mode. "
-				 "To enter normal mode, use bypass.stop");
+		upslogx(LOG_INSTCMD_FAILED,
+			"load.on error: UPS is already on, and is in bypass mode. "
+			"To enter normal mode, use bypass.stop");
 		return STAT_INSTCMD_FAILED;
 	}
 	else {
 		/* unreachable, see comments for r != 0 at the beginning */
 		/* FIXME: ..._INVALID ? */
-		upslogx(LOG_INSTCMD_FAILED, "load.on error: invalid ups.status (%s) detected. "
-				 "Please file a bug report!", status);
+		upslogx(LOG_INSTCMD_FAILED,
+			"load.on error: invalid ups.status (%s) detected. "
+			"Please file a bug report!", status);
 		return STAT_INSTCMD_FAILED;
 	}
 
@@ -1830,6 +1849,12 @@ void upsdrv_help(void)
 }
 
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
+
 /* list flags and values that you want to receive via -x */
 void upsdrv_makevartable(void)
 {
@@ -1855,7 +1880,9 @@ void upsdrv_cleanup(void)
 		modbus_close(modbus_ctx);
 		modbus_free(modbus_ctx);
 	}
-	ser_close(upsfd, device_path);
+	if (upsfd != ERROR_FD) {
+		ser_close(upsfd, device_path);
+	}
 }
 
 
@@ -1963,8 +1990,9 @@ static int ups2000_read_registers(modbus_t *ctx, int addr, int nb, uint16_t *des
 	int r = -1;
 
 	if (addr < 10000)
-		upslogx(LOG_ERR, "Invalid register read from %04d detected. "
-				 "Please file a bug report!", addr);
+		upslogx(LOG_ERR,
+			"Invalid register read from %04d detected. "
+			"Please file a bug report!", addr);
 
 	for (i = 0; i < 3; i++) {
 		/*
@@ -1995,8 +2023,9 @@ static int ups2000_read_registers(modbus_t *ctx, int addr, int nb, uint16_t *des
 		 * this register returns invalid values. This is a known problem
 		 * and it's not fatal, so we use LOG_INFO.
 		 */
-		if (retry_status == RETRY_ENABLE &&
-		    addr == 12002 && (dest[0] < 2 || dest[0] > 5)
+		if (retry_status == RETRY_ENABLE
+		 && addr == 12002
+		 && (dest[0] < 2 || dest[0] > 5)
 		) {
 			upslogx(LOG_INFO, "Battery status has a non-fatal read failure, it's usually harmless. Retrying... ");
 			sleep(1);
@@ -2023,8 +2052,9 @@ static int ups2000_write_registers(modbus_t *ctx, int addr, int nb, uint16_t *sr
 	int r = -1;
 
 	if (addr < 10000)
-		upslogx(LOG_ERR, "Invalid register write to %04d detected. "
-				 "Please file a bug report!", addr);
+		upslogx(LOG_ERR,
+			"Invalid register write to %04d detected. "
+			"Please file a bug report!", addr);
 
 	for (i = 0; i < 3; i++) {
 		r = modbus_write_registers(ctx, addr, nb, src);

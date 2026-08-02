@@ -48,7 +48,7 @@
 #include "timehead.h"
 
 #define DRIVER_NAME	"Microsol Solis UPS driver"
-#define DRIVER_VERSION	"0.72"
+#define DRIVER_VERSION	"0.74"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -194,10 +194,10 @@ static void send_shutdown( void ) {
 	int i;
 
 	for (i = 0; i < 10; i++)
-	  ser_send_char(upsfd, CMD_SHUT );
+		ser_send_char(upsfd, CMD_SHUT);
 
-	upslogx(LOG_NOTICE, "Ups shutdown command sent");
-	printf("Ups shutdown command sent\n");
+	upslogx(LOG_NOTICE, "UPS shutdown command sent");
+	printf("UPS shutdown command sent\n");
 }
 
 /* save config ups */
@@ -447,7 +447,7 @@ static void scan_received_pack(void) {
 
 	/* Specific for STAY1200_USB */
 	if (SolisModel == 16) {
-		 InFreq = ((float)(0.37 * (257 - (aux >> 8))));
+		InFreq = ((float)(0.37 * (257 - (aux >> 8))));
 	} else
 		InFreq = 0;
 
@@ -711,7 +711,7 @@ static void get_base_info(void) {
 	isec = now->tm_sec;
 	weekn = now->tm_wday;
 
-	strcpy(seman, DaysOfWeek[weekn]);
+	snprintf(seman, sizeof(seman), "%s", DaysOfWeek[weekn]);
 
 	if (testvar("battext"))
 		BattExtension = atoi(getval("battext"));
@@ -1003,6 +1003,11 @@ void upsdrv_help(void) {
 	printf(" where houron is power-on hour and houroff is shutdown and power-off hour\n");
 	printf(" Uses daysweek and houron to programming and save UPS power on/off\n");
 	printf(" These are valid only if prgshut = 2 or 3\n");
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
 }
 
 void upsdrv_makevartable(void) {

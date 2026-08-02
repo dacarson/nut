@@ -58,7 +58,7 @@
 #	define DRIVER_NAME	"Generic Q* Serial driver"
 #endif	/* QX_USB */
 
-#define DRIVER_VERSION	"0.45"
+#define DRIVER_VERSION	"0.53"
 
 #ifdef QX_SERIAL
 #	include "serial.h"
@@ -73,6 +73,7 @@
 #include "nutdrv_qx_hunnox.h"
 #include "nutdrv_qx_innovart31.h"
 #include "nutdrv_qx_innovart33.h"
+#include "nutdrv_qx_innovatae.h"
 #include "nutdrv_qx_mecer.h"
 #include "nutdrv_qx_megatec.h"
 #include "nutdrv_qx_megatec-old.h"
@@ -106,6 +107,7 @@ static subdriver_t	*subdriver_list[] = {
 	&ablerex_subdriver,
 	&innovart31_subdriver,
 	&innovart33_subdriver,
+	&innovatae_subdriver,
 	&q2_subdriver,
 	&q6_subdriver,
 	&gtec_subdriver,
@@ -292,6 +294,148 @@ int qx_multiply_m2s(item_t *item, char *value, const size_t valuelen) {
 
 	snprintf(value, valuelen, "%.0f", s * 60.0);
 	return 0;
+}
+
+static void analyze_mapping_usage(void) {
+	/* Check if the subdriver code (mappings) and the device report
+	 * sit together well. Note that for yet-unknown concepts, the
+	 * NUT driver developers can either raise a discussion on how
+	 * to best formalize that concept via docs/nut-names.txt, or
+	 * temporarily place them into "experimental.*" or "unmapped.*"
+	 * namespaces.
+	 *
+	 * Later also check that all defined mappings were used?
+	 * TBH, this is unlikely in practice, so of little value
+	 * (unless we are troubleshooting and under 5 or 10 data
+	 * points are served from actually the device, and not
+	 * from user configs or driver fallbacks).
+	 *
+	 * See also: similar methods in usbhid-ups and snmp-ups.
+	 */
+	size_t	unused_count = 0, known_mappings = 0;
+	size_t	unused_bufsize = LARGEBUF, unused_prevlen = 0, used_mappings = 0;
+	int	ret_printf;
+	char	*unused_names = NULL;
+	item_t	*item;
+
+	/* FIXME? this activity is limited to when debugging is enabled, even
+	 *  if some of the messages below can be posted visibly at level 0.
+	 */
+	if (nut_debug_level < 1)
+		return;
+
+	upsdebugx(1, "%s: checking if the subdriver code (mappings) "
+		"consults all data points from the device report",
+		__func__);
+
+	if (!subdriver->qx2nut) {
+		upsdebugx(1, "%s: SKIP: subdriver->qx2nut==null", __func__);
+		return;
+	}
+
+	unused_names = (char *)xcalloc(unused_bufsize, sizeof(char));
+
+	for (item = subdriver->qx2nut; item->info_type != NULL; item++) {
+		if (!item)
+			continue;
+
+		known_mappings++;
+
+		if (item->qxflags & QX_FLAG_MAPPING_HANDLED) {
+			used_mappings++;
+		} else {
+			const char	*pName = item->info_type;
+			const char	*pType = (item->qxflags & QX_FLAG_CMD ? "cmd" : "data");
+			int	retry = 0;
+
+			/* Keep aliases for code similarity with usbhid-ups and nutdrv_qx */
+			char	**pNames = &unused_names;
+			size_t	*pCount = &unused_count, *pPrevLen = &unused_prevlen, *pBufSize = &unused_bufsize;
+
+			if (!pName) {
+				upsdebugx(2, "%s: error getting a data point name, skipped", __func__);
+				continue;
+			}
+
+			/* We may overflow the pre-allocated buffer,
+			 * so we loop here until snprintf() succeeds
+			 * or we are known to have failed completely.
+			 */
+			do {
+				retry = 0;
+				if (!*pNames) {
+					break;
+				}
+
+				upsdebugx(5, "%s: adding '%s (%s)' (%" PRIuSIZE " bytes) "
+					"to buffer of %" PRIuSIZE "/%" PRIuSIZE " bytes",
+					__func__, NUT_STRARG(pName), NUT_STRARG(pType),
+					pName ? strlen(pName) : 0,
+					*pPrevLen, *pBufSize);
+
+				ret_printf = snprintf(*pNames + *pPrevLen, *pBufSize - *pPrevLen - 1, "%s%s (%s)",
+					*pCount ? ", " : "", NUT_STRARG(pName), NUT_STRARG(pType));
+
+				upsdebugx(6, "%s: snprintf() returned %d", __func__, ret_printf);
+				(*pNames)[*pBufSize - 1] = '\0';
+
+				if (ret_printf < 0) {
+					upsdebugx(1, "%s: error collecting names, might not report unused descriptor names", __func__);
+				} else if ((size_t)ret_printf + *pPrevLen >= *pBufSize) {
+					if (*pBufSize < SIZE_MAX - LARGEBUF) {
+						*pBufSize = *pBufSize + LARGEBUF;
+						upsdebugx(1, "%s: buffer overflowed, trying to re-allocate as %" PRIuSIZE, __func__, *pBufSize);
+							*pNames = (char *)realloc(*pNames, *pBufSize);
+
+						if (!*pNames) {
+							upsdebugx(1, "%s: buffer overflowed, will not report unused descriptor names", __func__);
+						} else {
+							upsdebugx(5, "%s: buffer overflowed, but reallocated successfully - retrying", __func__);
+							/* Retry this loop */
+							retry = 1;
+						}
+					} else {
+						upsdebugx(1, "%s: buffer overflowed, might not report unused descriptor names", __func__);
+					}
+				} else {
+					*pPrevLen += (size_t)ret_printf;
+				}
+			} while (retry);
+
+			*pCount = *pCount + 1;
+		}
+	}
+
+	if (unused_count) {
+		upsdebugx(1, "%s: %" PRIuSIZE " items are present in the "
+			"mapping table for the SNMP UPS, but %" PRIuSIZE " "
+			"of them were completely not used by name via the "
+			"mapping defined in the selected NUT subdriver %s: %s",
+			__func__, known_mappings, unused_count,
+			NUT_STRARG(subdriver->name), NUT_STRARG(unused_names));
+	}
+
+	if (unused_names)
+		free(unused_names);
+
+	/* We arbitrarily declare that having under 10 known or used
+	 * mappings is few enough to be loud about this */
+	if (known_mappings < 10 || used_mappings < 10) {
+		upsdebugx(0,
+			"%s: %" PRIuSIZE " mapping entries are defined, and "
+			"%" PRIuSIZE " were actually used from SNMP walk, "
+			"in the selected NUT subdriver %s",
+			__func__, known_mappings, used_mappings,
+			NUT_STRARG(subdriver->name));
+
+		upsdebugx(0, "Please check if there is a newer version of NUT available "
+			"(may be not packaged for your distribution yet), try a custom "
+			"build of development branch to test latest driver code per "
+			"%s/docs/user-manual.chunked/_installation_instructions.html#Installing_inplace, "
+			"and see %s/docs/developer-guide.chunked/new-drivers.html#nutdrv_qx-subdrivers "
+			"for suggestions how you can help improve this driver.",
+			NUT_WEBSITE_BASE, NUT_WEBSITE_BASE);
+	}
 }
 
 /* Fill batt.volt.act and guesstimate the battery charge
@@ -768,6 +912,8 @@ static int	phoenix_command(const char *cmd, size_t cmdlen, char *buf, size_t buf
 	size_t	tmplen;
 	int	ret;
 	size_t	i;
+
+	memset(tmp, 0, sizeof(tmp));
 
 	if (buflen > INT_MAX) {
 		upsdebugx(3, "%s: requested to read too much (%" PRIuSIZE "), "
@@ -1289,6 +1435,7 @@ static int	hunnox_command(const char *cmd, size_t cmdlen, char *buf, size_t bufl
 		{ "I\r",	0x0c, },	/* Vendor infos */
 		{ "Q\r",	0x07, },	/* Beeper toggle */
 		{ "C\r",	0x0a, },	/* Cancel shutdown/Load on [0x(0..F)A]*/
+		{ "BL\r",	0xf3, },	/* Battery charge */
 		{ NULL, 0 }
 	};
 	int	i, ret, index = 0;
@@ -1495,6 +1642,7 @@ static int	fuji_command(const char *cmd, size_t cmdlen, char *buf, size_t buflen
 	/* Send command */
 
 	/* Remove the CR */
+	memset(command, 0, sizeof(command));
 	snprintf(command, sizeof(command), "%.*s", (int)strcspn(cmd, "\r"), cmd);
 
 	/* Length of the command that will be sent to the UPS can be
@@ -1653,7 +1801,7 @@ static int	phoenixtec_command(const char *cmd, size_t cmdlen, char *buf, size_t 
 			*buf = '\0';
 			return ret;
 		}
-		if ((e = memchr(p, '\r', (size_t)ret)) != NULL) break;
+		if ((e = (char *)memchr(p, '\r', (size_t)ret)) != NULL) break;
 	}
 	if (e != NULL && ++e < buf + buflen) {
 		*e = '\0';
@@ -1802,6 +1950,8 @@ static int ablerex_command(const char *cmd, size_t cmdlen, char *buf, size_t buf
 		int	ret;
 
 		memset(buf, 0, buflen);
+		memset(tmp, 0, sizeof(tmp));
+
 		tmp[0] = 0x05;
 		tmp[1] = 0;
 		tmp[2] = 1 + (char)strcspn(cmd, "\r");
@@ -2016,10 +2166,10 @@ static void load_armac_endpoint_cache(void)
 				libusb_free_config_descriptor(config_descriptor);
 				return;
 			}
-		
+
 			for (i = 0; i < interface_descriptor->bNumEndpoints; i++) {
 				const struct libusb_endpoint_descriptor *endpoint = &interface_descriptor->endpoint[i];
-		
+
 				if (endpoint->bEndpointAddress & LIBUSB_ENDPOINT_IN) {
 					found_in = TRUE;
 					armac_endpoint_cache.in_endpoint_address = endpoint->bEndpointAddress;
@@ -2055,8 +2205,14 @@ static void load_armac_endpoint_cache(void)
  * software, which doesn't seem to be Armac specific. The banner is: "2004
  * Richcomm Technologies, Inc. Dec 27 2005 ver 1.1." Maybe other Richcomm UPSes
  * would work with this - better than with the richcomm_usb driver.
+ *
+ * NOTE: ARMAC_READ_SIZE_FOR_CONTROL is set to 8. While some Armac devices
+ * return exactly 6 bytes per interrupt read (1 control byte + 5 data bytes),
+ * others return 7 bytes (1 control byte + 6 data bytes). Requesting 8 bytes
+ * safely accommodates these variations (up to endpoint MaxPacketSize) without
+ * dropping trailing bytes or timing out.
  */
-#define ARMAC_READ_SIZE_FOR_CONTROL 6
+#define ARMAC_READ_SIZE_FOR_CONTROL 8
 #define ARMAC_READ_SIZE_FOR_INTERRUPT 64
 static int	armac_command(const char *cmd, size_t cmdlen, char *buf, size_t buflen)
 {
@@ -2107,12 +2263,12 @@ static int	armac_command(const char *cmd, size_t cmdlen, char *buf, size_t bufle
 
 #if WITH_LIBUSB_1_0
 	/* Be conservative and do not break old Armac UPSes */
-	use_interrupt = armac_endpoint_cache.ok
+	use_interrupt = (bool_t)(armac_endpoint_cache.ok
 		&& armac_endpoint_cache.in_endpoint_address == 0x82
 		&& armac_endpoint_cache.in_bmAttributes & LIBUSB_TRANSFER_TYPE_INTERRUPT
 		&& armac_endpoint_cache.out_endpoint_address == 0x02
 		&& armac_endpoint_cache.out_bmAttributes & LIBUSB_TRANSFER_TYPE_INTERRUPT
-		&& armac_endpoint_cache.in_wMaxPacketSize == 64;
+		&& armac_endpoint_cache.in_wMaxPacketSize == 64);
 #endif /* WITH_LIBUSB_1_0 */
 
 	if (use_interrupt && cmddatalen < armac_endpoint_cache.in_wMaxPacketSize) {
@@ -2137,8 +2293,8 @@ static int	armac_command(const char *cmd, size_t cmdlen, char *buf, size_t bufle
 		/* Cleanup buffer before sending a new command */
 		for (i = 0; i < 10; i++) {
 			ret = usb_interrupt_read(udev, 0x81,
-				(usb_ctrl_charbuf)tmpbuf, ARMAC_READ_SIZE_FOR_CONTROL, 100);
-			if (ret != ARMAC_READ_SIZE_FOR_CONTROL) {
+				(usb_ctrl_charbuf)tmpbuf, read_size, 100);
+			if (ret <= 0) {
 				/* Timeout - buffer is clean. */
 				break;
 			}
@@ -2177,14 +2333,14 @@ static int	armac_command(const char *cmd, size_t cmdlen, char *buf, size_t bufle
 	while (bufpos + read_size + 1 < buflen) {
 		size_t bytes_available;
 
-		/* Read data in 6-byte chunks */
+		/* Read data in chunks (read_size handles both 8-byte control and 64-byte interrupt cases) */
 		ret = usb_interrupt_read(udev, use_interrupt ? armac_endpoint_cache.in_endpoint_address : 0x81,
 			(usb_ctrl_charbuf)tmpbuf, read_size, 1000);
 
 		/* Any errors here mean that we are unable to read a reply
 		 * (which will happen after successfully writing a command
 		 * to the UPS) */
-		if (ret != read_size) {
+		if (ret <= 0) {
 			/* NOTE: If end condition is invalid for particular UPS we might make one
 			 * request more and get this error. If bufpos > (say) 10 this could be ignored
 			 * and the reply correctly read. */
@@ -2215,9 +2371,9 @@ static int	armac_command(const char *cmd, size_t cmdlen, char *buf, size_t bufle
 			break;
 		}
 
-		if (bytes_available > (unsigned)read_size - 1) {
-			/* Single interrupt transfer has 1 control + 5 data bytes */
-			bytes_available = read_size - 1;
+		if (bytes_available > (unsigned)ret - 1) {
+			/* Do not read past what we actually received */
+			bytes_available = ret - 1;
 		}
 
 		/* Copy bytes into the final buffer while detecting end of line - \r */
@@ -2374,28 +2530,62 @@ typedef struct {
 	void		*(*fun)(USBDevice_t *);	/* Handler for specific processing */
 } qx_usb_device_id_t;
 
+/* Unregistered vendor 0x0001 (commonly identified as Fry's Electronics) */
+#define NONAME0001_VENDORID	0x0001
+
+/* Unregistered vendor 0xFFFF */
+#define NONAMEFFFF_VENDORID	0xffff
+
+/* ST Microelectronics */
+#define STMICRO_VENDORID	0x0483
+
+/* Sysgration Ltd. */
+#define SYSGRATION_VENDORID	0x05b8
+
+/* Cypress Semiconductor */
+#define CYPRESS_VENDORID	0x0665
+
+/* Phoenixtec Power Co., Ltd */
+#define PHOENIXTEC_VENDORID	0x06da
+
+/* Lakeview Research */
+#define LAKEVIEW_VENDORID	0x0925
+
+/* Unitek UPS Systems */
+#define UNITEK_VENDORID	0x0f03
+
+/* GE */
+#define GE_VENDORID	0x14f0
+
+/* QinHeng Electronics */
+#define QINHENG_VENDORID	0x1a86
+
+/* Legrand */
+#define LEGRAND_VENDORID	0x1cb0
+
 /* USB VendorID/ProductID/iManufacturer/iProduct match - note: rightmost comment is used for naming rules by tools/nut-usbinfo.pl */
 static qx_usb_device_id_t	qx_usb_id[] = {
-	{ USB_DEVICE(0x05b8, 0x0000),	NULL,		NULL,			&cypress_subdriver },	/* Agiler UPS */
-	{ USB_DEVICE(0xffff, 0x0000),	NULL,		NULL,			&ablerex_subdriver_fun },	/* Ablerex 625L USB (Note: earlier best-fit was "krauler_subdriver" before PR #1135) */
-	{ USB_DEVICE(0x1cb0, 0x0035),	NULL,		NULL,			&krauler_subdriver },	/* Legrand Daker DK / DK Plus */
-	{ USB_DEVICE(0x0665, 0x5161),	NULL,		NULL,			&cypress_subdriver },	/* Belkin F6C1200-UNV/Voltronic Power UPSes */
-	{ USB_DEVICE(0x06da, 0x0002),	"Phoenixtec Power","USB Cable (V2.00)",	&phoenixtec_subdriver },/* Masterguard A Series */
-	{ USB_DEVICE(0x06da, 0x0002),	NULL,		NULL,			&cypress_subdriver },	/* Online Yunto YQ450 */
-	{ USB_DEVICE(0x06da, 0x0003),	NULL,		NULL,			&ippon_subdriver },	/* Mustek Powermust */
-	{ USB_DEVICE(0x06da, 0x0004),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova 3/1 T */
-	{ USB_DEVICE(0x06da, 0x0005),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova RT */
-	{ USB_DEVICE(0x06da, 0x0201),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova T */
-	{ USB_DEVICE(0x06da, 0x0601),	NULL,		NULL,			&phoenix_subdriver },	/* Online Zinto A */
-	{ USB_DEVICE(0x0f03, 0x0001),	NULL,		NULL,			&cypress_subdriver },	/* Unitek Alpha 1200Sx */
-	{ USB_DEVICE(0x14f0, 0x00c9),	NULL,		NULL,			&phoenix_subdriver },	/* GE EP series */
-	{ USB_DEVICE(0x0483, 0x0035),	NULL,		NULL,			&sgs_subdriver },	/* TS Shara UPSes; vendor ID 0x0483 is from ST Microelectronics - with product IDs delegated to different OEMs */
-	{ USB_DEVICE(0x0001, 0x0000),	"MEC",		"MEC0003",		&fabula_subdriver },	/* Fideltronik/MEC LUPUS 500 USB */
-	{ USB_DEVICE(0x0001, 0x0000),	NULL,		"MEC0003",		&fabula_hunnox_subdriver },	/* Hunnox HNX 850, reported to also help support Powercool and some other devices; closely related to fabula with tweaks */
-	{ USB_DEVICE(0x0001, 0x0000),	"ATCL FOR UPS",	"ATCL FOR UPS",		&fuji_subdriver },	/* Fuji UPSes */
-	{ USB_DEVICE(0x0001, 0x0000),	NULL,		NULL,			&krauler_subdriver },	/* Krauler UP-M500VA */
-	{ USB_DEVICE(0x0001, 0x0000),	NULL,		"MEC0003",		&snr_subdriver },	/* SNR-UPS-LID-XXXX UPSes */
-	{ USB_DEVICE(0x0925, 0x1234),	NULL,		NULL,			&armac_subdriver },	/* Armac UPS and maybe other richcomm-like or using old PowerManagerII software */
+	{ USB_DEVICE(SYSGRATION_VENDORID,	0x0000),	NULL,		NULL,			&cypress_subdriver },	/* Agiler UPS */
+	{ USB_DEVICE(NONAMEFFFF_VENDORID,	0x0000),	NULL,		NULL,			&ablerex_subdriver_fun },	/* Ablerex 625L USB (Note: earlier best-fit was "krauler_subdriver" before PR #1135) */
+	{ USB_DEVICE(LEGRAND_VENDORID,	0x0035),	NULL,		NULL,			&krauler_subdriver },	/* Legrand Daker DK / DK Plus */
+	{ USB_DEVICE(CYPRESS_VENDORID,	0x5161),	NULL,		NULL,			&cypress_subdriver },	/* Belkin F6C1200-UNV/Voltronic Power UPSes */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0002),	"Phoenixtec Power","USB Cable (V2.00)",	&phoenixtec_subdriver },/* Masterguard A Series */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0002),	NULL,		NULL,			&cypress_subdriver },	/* Online Yunto YQ450 */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0003),	NULL,		NULL,			&ippon_subdriver },	/* Mustek Powermust */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0004),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova 3/1 T */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0005),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova RT */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0201),	NULL,		NULL,			&cypress_subdriver },	/* Phoenixtec Innova T */
+	{ USB_DEVICE(PHOENIXTEC_VENDORID,	0x0601),	NULL,		NULL,			&phoenix_subdriver },	/* Online Zinto A */
+	{ USB_DEVICE(UNITEK_VENDORID,	0x0001),	NULL,		NULL,			&cypress_subdriver },	/* Unitek Alpha 1200Sx */
+	{ USB_DEVICE(GE_VENDORID,	0x00c9),	NULL,		NULL,			&phoenix_subdriver },	/* GE EP series */
+	{ USB_DEVICE(QINHENG_VENDORID,	0x7523),	NULL,		NULL,			NULL },	/* NOTE: VID:PID may be used by non-UPS devices with CH340/341 chips! But also Ippon Innova TAE series, using QinHeng Electronics CH340 serial converter; no specific "USB subdriver" handler defined at the moment */
+	{ USB_DEVICE(STMICRO_VENDORID,	0x0035),	NULL,		NULL,			&sgs_subdriver },	/* TS Shara UPSes; vendor ID 0x0483 is from ST Microelectronics - with product IDs delegated to different OEMs */
+	{ USB_DEVICE(NONAME0001_VENDORID,	0x0000),	"MEC",		"MEC0003",		&fabula_subdriver },	/* Fideltronik/MEC LUPUS 500 USB */
+	{ USB_DEVICE(NONAME0001_VENDORID,	0x0000),	NULL,		"MEC0003",		&fabula_hunnox_subdriver },	/* Hunnox HNX 850, reported to also help support Powercool and some other devices; closely related to fabula with tweaks */
+	{ USB_DEVICE(NONAME0001_VENDORID,	0x0000),	"ATCL FOR UPS",	"ATCL FOR UPS",		&fuji_subdriver },	/* Fuji UPSes */
+	{ USB_DEVICE(NONAME0001_VENDORID,	0x0000),	NULL,		NULL,			&krauler_subdriver },	/* Krauler UP-M500VA */
+	{ USB_DEVICE(NONAME0001_VENDORID,	0x0000),	NULL,		"MEC0003",		&snr_subdriver },	/* SNR-UPS-LID-XXXX UPSes */
+	{ USB_DEVICE(LAKEVIEW_VENDORID,	0x1234),	NULL,		NULL,			&armac_subdriver },	/* Armac UPS and maybe other richcomm-like or using old PowerManagerII software */
 	/* End of list */
 	{ -1,	-1,	NULL,	NULL,	NULL }
 };
@@ -2432,7 +2622,8 @@ static int qx_is_usb_device_supported(qx_usb_device_id_t *usb_device_id_list, US
 		if (usbdev->fun != NULL)
 			(*usbdev->fun)(device);
 
-		return SUPPORTED;
+		if (subdriver_command)
+			return SUPPORTED;
 
 	}
 
@@ -3068,29 +3259,46 @@ void	upsdrv_help(void)
 {
 #ifndef TESTING
 	size_t i;
+	size_t len = 0, maxlen_prot = 0;
+	char	subdrv_name[SMALLBUF], *p;
 
 # ifdef QX_USB
 	/* Subdrivers have special SOMETHING_command() handling and
 	 * are listed in usbsubdriver[] array (just above in this
 	 * source file).
 	 */
-	printf("\nAcceptable values for USB 'subdriver' via -x or ups.conf in this driver: ");
+	size_t maxlen_usb = 0;
+
+	printf("\nAcceptable values for USB 'subdriver' via -x or ups.conf in this driver:\n");
+
+	/* Calculate the longest USB subdriver name for print alignment */
 	for (i = 0; usbsubdriver[i].name != NULL; i++) {
-		if (i>0)
-			printf(", ");
-		printf("%s", usbsubdriver[i].name);
+		len = strlen(usbsubdriver[i].name);
+		if (len > maxlen_usb)
+			maxlen_usb = len;
 	}
-	printf("\n");
+
+	for (i = 0; usbsubdriver[i].name != NULL; i++) {
+		printf("  %*s\n", (int)maxlen_usb, usbsubdriver[i].name);
+	}
 # endif	/* QX_USB*/
 
 	/* Protocols are the first token from "name" field in
 	 * subdriver_t instances in files like nutdrv_qx_mecer.c
 	 */
-	printf("\nAcceptable values for 'protocol' via -x or ups.conf in this driver: ");
-	for (i = 0; subdriver_list[i] != NULL; i++) {
-		char	subdrv_name[SMALLBUF], *p;
+	printf("\nAcceptable values for 'protocol' via -x or ups.conf in this driver:\n");
 
-		/* Get rid of subdriver version */
+	/* Calculate the longest protocol name for print alignment */
+	for (i = 0; subdriver_list[i] != NULL; i++) {
+		snprintf(subdrv_name, sizeof(subdrv_name), "%.*s",
+			(int)strcspn(subdriver_list[i]->name, " "),
+			subdriver_list[i]->name);
+		len = strlen(subdrv_name);
+		if (len > maxlen_prot)
+			maxlen_prot = len;
+	}
+
+	for (i = 0; subdriver_list[i] != NULL; i++) {
 		snprintf(subdrv_name, sizeof(subdrv_name), "%.*s",
 			(int)strcspn(subdriver_list[i]->name, " "),
 			subdriver_list[i]->name);
@@ -3099,12 +3307,14 @@ void	upsdrv_help(void)
 		for (p = subdrv_name; *p; ++p)
 			*p = tolower((unsigned char)(*p));
 
-		if (i>0)
-			printf(", ");
-		printf("%s", subdrv_name);
+		printf("  %*s\n", (int)maxlen_prot, subdrv_name);
 	}
-	printf("\n");
 #endif	/* TESTING */
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
 }
 
 /* Adding flags/vars */
@@ -3128,7 +3338,7 @@ void	upsdrv_makevartable(void)
 
 	snprintf(temp, sizeof(temp),
 		"Set polling frequency, in seconds, to reduce data flow (default=%d)",
-			 DEFAULT_POLLFREQ);
+		DEFAULT_POLLFREQ);
 	addvar(VAR_VALUE, QX_VAR_POLLFREQ, temp);
 
 	addvar(VAR_VALUE, "protocol",
@@ -3247,6 +3457,8 @@ void	upsdrv_updateinfo(void)
 	retry = 0;
 
 	dstate_dataok();
+
+	upsdebugx(1, "%s finished", __func__);
 }
 
 /* Initialise data from UPS */
@@ -3262,6 +3474,8 @@ void	upsdrv_initinfo(void)
 	if (qx_ups_walk(QX_WALKMODE_INIT) == FALSE) {
 		fatalx(EXIT_FAILURE, "Can't initialise data from the UPS");
 	}
+
+	analyze_mapping_usage();
 
 	/* Init battery guesstimation */
 	qx_initbattery();
@@ -3316,8 +3530,14 @@ void	upsdrv_initinfo(void)
 	upsh.instcmd = instcmd;
 
 	/* Subdriver initinfo */
-	if (subdriver->initinfo != NULL)
+	if (subdriver->initinfo != NULL) {
+		upsdebugx(2, "%s calling subdriver-specific initinfo()...", __func__);
 		subdriver->initinfo();
+	} else {
+		upsdebugx(2, "%s there is no subdriver-specific initinfo() to call", __func__);
+	}
+
+	upsdebugx(1, "%s finished", __func__);
 }
 
 /* Open the port and the like and choose the subdriver */
@@ -3435,7 +3655,7 @@ void	upsdrv_initups(void)
 		ser_set_rts(upsfd, cablepower[i].rts);
 
 		/* Allow some time to settle for the cablepower */
-		usleep(100000);
+		usleep(1100000);
 
 #	endif	/* TESTING */
 
@@ -3525,7 +3745,7 @@ void	upsdrv_initups(void)
 		default:
 			fatalx(EXIT_FAILURE,
 				"Invalid regular expression: %s",
-				 regex_array[ret]);
+				regex_array[ret]);
 		}
 
 		/* Link the matchers */
@@ -3593,12 +3813,32 @@ void	upsdrv_initups(void)
 #endif	/* QX_USB */
 
 	/* Choose subdriver */
+#if defined(QX_SERIAL) && defined(QX_USB)
+	upsdebugx(1, "%s: trying to match the handler for %s device", __func__, is_usb ? "USB" : "Serial");
+#else
+# ifdef QX_SERIAL
+	upsdebugx(1, "%s: trying to match the handler for Serial device", __func__);
+# endif
+# ifdef QX_USB
+	upsdebugx(1, "%s: trying to match the handler for USB device", __func__);
+# endif
+# if !(defined(QX_SERIAL)) && !(defined(QX_USB))
+	/* Should not get here... so it is even more interesting to see this */
+	upsdebugx(1, "%s: trying to match the handler for a device (weird build of the driver does not discern Serial/USB)", __func__);
+# endif
+#endif
 	if (!subdriver_matcher())
 		fatalx(EXIT_FAILURE, "Device not supported!");
 
 	/* Subdriver initups */
-	if (subdriver->initups != NULL)
+	if (subdriver->initups != NULL) {
+		upsdebugx(2, "%s calling subdriver-specific initups()...", __func__);
 		subdriver->initups();
+	} else {
+		upsdebugx(2, "%s there is no subdriver-specific initups() to call", __func__);
+	}
+
+	upsdebugx(1, "%s finished", __func__);
 }
 
 /* Close the ports and the like */
@@ -3644,6 +3884,7 @@ void	upsdrv_cleanup(void)
 
 #endif	/* TESTING */
 
+	upsdebugx(1, "%s finished", __func__);
 }
 
 
@@ -3651,10 +3892,24 @@ void	upsdrv_cleanup(void)
 
 /* Generic command processing function: send a command and read a reply.
  * Returns < 0 on error, 0 on timeout and the number of bytes read on success. */
+/* Consecutive LIBUSB_ERROR_OVERFLOW results on the interrupt-IN endpoint
+ * tolerated before escalating from "retry on the next poll" to a USB-level
+ * device reset. A one-off oversized frame is transient; a sustained run means
+ * the bridge firmware has wedged the endpoint and only re-enumeration clears
+ * it (e.g. the 0665:5161 Cypress USB-serial family: Salicru SPS, Ippon,
+ * ViewPower, various Voltronic Power). See NUT issue #598. */
+#define QX_USB_OVERFLOW_RESET_TRIES	3
+
 static ssize_t	qx_command(const char *cmd, size_t cmdlen, char *buf, size_t buflen)
 {
 #ifndef TESTING
 	ssize_t	ret = -1;
+# ifdef QX_USB
+	/* Persists across calls; only consecutive overflows accumulate (any clean
+	 * read zeroes it, see the switch on `ret` below). */
+	static int	overflow_tries = 0;
+	int	reconnecting = (udev == NULL);
+# endif
 #endif
 
 /* NOTE: Could not find in which ifdef-ed codepath, but clang complained
@@ -3673,8 +3928,8 @@ static ssize_t	qx_command(const char *cmd, size_t cmdlen, char *buf, size_t bufl
 	if (is_usb) {
 #  endif	/* QX_SERIAL (&& QX_USB)*/
 
-		if (udev == NULL) {
-			dstate_setinfo("driver.state", "reconnect.trying");
+		if (reconnecting) {
+			reconnect_trying(RECONNECT_TRYING);
 
 			ret = usb->open_dev(&udev, &usbdevice, reopen_matcher, NULL);
 
@@ -3682,12 +3937,16 @@ static ssize_t	qx_command(const char *cmd, size_t cmdlen, char *buf, size_t bufl
 				return ret;
 			}
 
-			dstate_setinfo("driver.state", "reconnect.updateinfo");
+			reconnect_trying(RECONNECT_UPDATEINFO);
 		}
 
 		ret = (*subdriver_command)(cmd, cmdlen, buf, buflen);
 
 		if (ret >= 0) {
+			overflow_tries = 0;	/* clean read: forget any overflow streak */
+			if (reconnecting) {
+				reconnect_trying(RECONNECT_SUCCESS);
+			}
 			return ret;
 		}
 
@@ -3744,18 +4003,46 @@ static ssize_t	qx_command(const char *cmd, size_t cmdlen, char *buf, size_t bufl
 		case LIBUSB_ERROR_NOT_FOUND:	/* No such file or directory */
 		fallthrough_case_reconnect:
 			/* Uh oh, got to reconnect! */
+			/* Not accounting just yet with reconnect_trying(RECONNECT_TRYING),
+			 * to avoid off-by-one counter errors */
 			dstate_setinfo("driver.state", "reconnect.trying");
 			usb->close_dev(udev);
 			udev = NULL;
 			break;
 
+		case LIBUSB_ERROR_OVERFLOW:	/* Value too large for defined data type:
+						 * an oversized interrupt-IN frame. A one-off is
+						 * transient (retry on the next poll); a sustained
+						 * run means the bridge firmware has wedged the
+						 * endpoint and only a USB-level reset recovers it.
+						 * See NUT issue #598. */
+			if (++overflow_tries < QX_USB_OVERFLOW_RESET_TRIES) {
+				upsdebugx(2, "Got OVERFLOW on EP 0x81 (%d/%d), retrying on next poll",
+					overflow_tries, QX_USB_OVERFLOW_RESET_TRIES);
+				break;
+			}
+			upsdebugx(1, "OVERFLOW on EP 0x81 persisted for %d polls; resetting device",
+				overflow_tries);
+			overflow_tries = 0;
+			if (usb_reset(udev) == 0) {
+				upsdebugx(1, "Device reset handled");
+			}
+			goto fallthrough_case_reconnect;
+
 		case LIBUSB_ERROR_TIMEOUT:	/* Connection timed out */
-		case LIBUSB_ERROR_OVERFLOW:	/* Value too large for defined data type */
 #if EPROTO && WITH_LIBUSB_0_1		/* limit to libusb 0.1 implementation */
 		case -EPROTO:		/* Protocol error */
 #endif
 		default:
 			break;
+		}
+
+		if (reconnecting) {
+			/* Success after updateinfo in the bulk of this method body */
+			upsdebugx(1, "%s: libusb returned %" PRIiSIZE
+				" which was not classified as a known error, assuming reconnection succeeded",
+				__func__, ret);
+			reconnect_trying(RECONNECT_SUCCESS);
 		}
 
 #  ifdef QX_SERIAL
@@ -3772,6 +4059,7 @@ static ssize_t	qx_command(const char *cmd, size_t cmdlen, char *buf, size_t bufl
 		ret = ser_send_buf(upsfd, cmd, cmdlen);
 
 		if (ret <= 0) {
+			/* TOTHINK: Is any special reconnect logic/tracking needed? */
 			upsdebugx(3, "send: %s (%" PRIiSIZE ")",
 				ret ? strerror(errno) : "timeout", ret);
 			return ret;
@@ -3896,6 +4184,8 @@ static int	subdriver_matcher(void)
 	const char	*protocol = getval("protocol");
 	int		i;
 
+	upsdebugx(2, "%s...", __func__);
+
 	/* Select the subdriver for this device */
 	for (i = 0; subdriver_list[i] != NULL; i++) {
 
@@ -3924,10 +4214,13 @@ static int	subdriver_matcher(void)
 
 			subdriver = subdriver_list[i];
 
+			upsdebugx(2, "%s: Trying protocol %s...", __func__, subdriver->name);
 			if (subdriver->claim()) {
+				upsdebugx(1, "%s: Trying protocol %s: claim succeeded", __func__, subdriver->name);
 				break;
 			}
 
+			upsdebugx(2, "%s: Trying protocol %s: claim failed", __func__, subdriver->name);
 			subdriver = NULL;
 
 		}
@@ -3939,10 +4232,13 @@ static int	subdriver_matcher(void)
 
 	if (!subdriver) {
 		upslogx(LOG_ERR, "Device not supported!");
+		upsdebugx(2, "%s finished", __func__);
 		return 0;
 	}
 
 	upslogx(LOG_INFO, "Using protocol: %s", subdriver->name);
+
+	upsdebugx(2, "%s finished", __func__);
 
 	return 1;
 }
@@ -4195,6 +4491,7 @@ static bool_t	qx_ups_walk(walkmode_t mode)
 				previous_item.answer);
 
 			/* Process the answer */
+			errno = 0;
 			retcode = qx_process_answer(item, strlen(item->answer));
 
 		/* ..otherwise: execute command to get answer from the UPS */
@@ -4426,11 +4723,15 @@ item_t	*find_nut_info(const char *varname, const unsigned long flag, const unsig
 /* Process the answer we got back from the UPS
  * Return -1 on errors, 0 on success
  * Can set errno, note that EINVAL means unsupported
- * parameter value here!
+ * parameter value here, and ETIMEDOUT can be passed
+ * from previous context for short reads, or set
+ * unilaterally for zero-length reads!
  */
 static int	qx_process_answer(item_t *item, const size_t len)
 {
-	errno = 0;
+	/* Initial errno inherited from caller, e.g. may be qx_command()
+	 * in qx_process(), but may be from other memset() etc. after it
+	 */
 
 	/* Query rejected by the UPS */
 	if (subdriver->rejected && !strcasecmp(item->answer, subdriver->rejected)) {
@@ -4442,11 +4743,18 @@ static int	qx_process_answer(item_t *item, const size_t len)
 
 	/* Short reply */
 	if (item->answer_len && len < item->answer_len) {
-		upsdebugx(2, "%s: short reply (%s) %" PRIuSIZE "<%" PRIuSIZE,
+		upsdebug_with_errno(2, "%s: short reply (%s) %" PRIuSIZE "<%" PRIuSIZE,
 			__func__, item->info_type, len, item->answer_len);
-		errno = EINVAL;
+		if (len == 0 || errno == ETIMEDOUT) {
+			errno = ETIMEDOUT;
+		} else {
+			errno = EINVAL;
+		}
 		return -1;
 	}
+
+	/* Not a systemic error by default */
+	errno = 0;
 
 	/* Wrong leading character */
 	if (item->leading && item->answer[0] != item->leading) {
@@ -4474,6 +4782,7 @@ static int	qx_process_answer(item_t *item, const size_t len)
 		snprintf(item->value, sizeof(item->value), "%s", "");
 	}
 
+	/* Reset the common error level, if some method above raised it */
 	errno = 0;
 	return 0;
 }
@@ -4489,7 +4798,7 @@ int	qx_process(item_t *item, const char *command)
 	size_t	cmdsz = (sizeof(char) * cmdlen); /* in bytes, to be pedantic */
 	int	cmd_len;
 
-	if ( !(cmd = xmalloc(cmdsz)) ) {
+	if ( !(cmd = (char *)xmalloc(cmdsz)) ) {
 		upslogx(LOG_ERR, "qx_process() failed to allocate buffer");
 		return -1;
 	}
@@ -4599,7 +4908,8 @@ int	ups_infoval_set(item_t *item)
 	}
 
 	if (item->qxflags & QX_FLAG_NONUT) {
-		upslogx(LOG_INFO, "%s: %s", item->info_type, value);
+		/* Hides QX_FLAG_NONUT variables from syslog unless the debug level is raised */
+		upsdebugx(2, "%s: %s", item->info_type, value);
 		return 1;
 	}
 
@@ -4609,6 +4919,7 @@ int	ups_infoval_set(item_t *item)
 		return -1;
 	}
 
+	item->qxflags |= QX_FLAG_MAPPING_HANDLED;
 	dstate_setinfo(item->info_type, "%s", value);
 
 	/* Fill batt.{chrg,runt}.act for guesstimation */

@@ -56,6 +56,8 @@
 "Ablerex"	"ups"	"2"	"GRs Plus series"	"USB"	"nutdrv_qx"
 "Ablerex"	"ups"	"1"	"(various)"	"Serial"	"nutdrv_hashx"	# https://www.ablerex.eu/download/
 
+"Accurat"	"ups"	"2"	"Flux 850"	"(USB ID 0925:1234, Richcomm V2.0, armac subdriver, megatec protocol)"	"nutdrv_qx"	# https://github.com/networkupstools/nut/issues/2738, https://github.com/networkupstools/nut/pull/3323
+
 "ActivePower"	"ups"	"2"	"400VA"	""	"blazer_ser"
 "ActivePower"	"ups"	"2"	"1400VA"	""	"blazer_ser"
 "ActivePower"	"ups"	"2"	"2000VA"	""	"blazer_ser"
@@ -78,6 +80,7 @@
 "APC"	"ups"	"1"	"Matrix-UPS"	""	"apcsmart"
 "APC"	"ups"	"1"	"Smart-UPS"	""	"apcsmart"
 "APC"	"ups"	"1"	"Smart-UPS SMT/SMX/SURTD"	"Microlink models with RJ45 socket - they *require* AP9620 SmartSlot expansion card and smart cable"	"apcsmart"
+"APC"	"ups"	"1"	"Smart-UPS SMT/SMX Microlink"	"Microlink serial driver"	"apcmicrolink"
 "APC"	"ups"	"3"	"Back-UPS Pro USB"	"USB"	"usbhid-ups"
 "APC"	"ups"	"3"	"Back-UPS BK650M2-CH"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/1970
 "APC"	"ups"	"3"	"Back-UPS (USB)"	"USB"	"usbhid-ups"
@@ -132,6 +135,7 @@
 "Appro"	"pdu"	"1"	"SWPDU"	"48 outlets"	"powerman-pdu (experimental)"
 
 "ARES"	"ups"	"2"	"AR265i"	"USB"	"nutdrv_qx port=auto vendorid=0001 productid=0000 protocol=hunnox langid_fix=0x0409 novendor noscanlangid"	# https://github.com/networkupstools/nut/pull/638 did not explicitly mention the driver parameters, but other reports in the discussion did
+"ARES"	"ups"	"2"	"AR630"	"USB"	"nutdrv_qx port=auto vendorid=0001 productid=0000 protocol=hunnox langid_fix=0x0409 novendor noscanlangid"
 
 "ARTronic"	"ups"	"2"	"ARTon Millenium 1/2/3/6/10 kVA"	"Serial"	"blazer_ser"
 "ARTronic"	"ups"	"2"	"ARTon Millenium 3.1 10/15/20 kVA"	"Serial"	"blazer_ser"
@@ -219,6 +223,7 @@
 "Belkin"	"ups"	"2"	"Universal UPS F6C1100-UNV"	"USB (2007 models, vendor id: 0665)"	"blazer_usb"
 "Belkin"	"ups"	"3"	"Universal UPS F6C1200-UNV"	"USB (<= 2005 models, vendor id: 050d)"	"usbhid-ups"
 "Belkin"	"ups"	"2"	"Universal UPS F6C1200-UNV"	"USB (2007 models, vendor id: 0665)"	"blazer_usb"
+"Belkin"	"ups"	"2"	"Universal UPS F6C1200-UNV"	"USB (USB ID 0665:5161)"	"nutdrv_qx"
 "Belkin"	"ups"	"2"	"Universal UPS F6H350deUNV"	"serial port"	"blazer_ser"
 "Belkin"	"ups"	"2"	"Universal UPS F6H350ukUNV"	"serial port"	"blazer_ser"
 "Belkin"	"ups"	"2"	"Universal UPS F6H500ukUNV"	"serial port"	"blazer_ser"
@@ -541,6 +546,9 @@
 
 "Gemini"	"ups"	"1"	"UPS625/UPS1000"	""	"safenet"
 
+"GoldenMate"	"ups"	"2"	"UPS 1000VA Pro (USB ID 075d:0300)"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/3015
+"GoldenMate"	"ups"	"2"	"1000VA/800W LiFePO4 (USB ID 06da:ffff)"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/3501
+
 "Grafenthal"	"ups"	"3"	"PR-3000-HS"	"SNMP/Web Minislot card (ref 149G0006)"	"snmp-ups"	# http://grafenthal.de/produkte/usv/online/pr-hs-serie/pr-3000-hs/?L=3et8
 
 "Greencell"	"ups"	"2"	"2000VA"	"USB"	"nutdrv_qx"	# https://github.com/networkupstools/nut/issues/1673
@@ -633,6 +641,7 @@
 "Ippon"	"ups"	"2"	"Ampere 1000/1500/2000/3000 bl"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2702
 "Ippon"	"ups"	"2"	"Innova RT 3/1 10K/10K compact/20K"	"USB"	"nutdrv_qx"	# https://github.com/networkupstools/nut/issues/2712
 "Ippon"	"ups"	"2"	"Innova RTB 1000/1500/2000/3000"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2702
+"Ippon"	"ups"	"2"	"Innova TAE 1000"	"USB"	"nutdrv_qx (battery_voltage_reports_one_pack override.battery.packs=12)"	# https://github.com/networkupstools/nut/issues/3137
 "Ippon"	"ups"	"2"	"Innova TBE 1000/2000/3000"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2702
 "Ippon"	"ups"	"2"	"Innova TB 1000/2000/3000"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2702
 "Ippon"	"ups"	"2"	"Back Power Pro II 500/600/800"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2702
@@ -660,6 +669,24 @@
 "Ippon"	"ups"	"2"	"2058874 Battery for UPS Ippon NA+ RTA 2000"	"Serial port"	"blazer_ser"
 "Ippon"	"ups"	"2"	"2049899 Battery for UPS Ippon NA+ RTA 3000"	"Serial port"	"blazer_ser"
 "Ippon"	"ups"	"2"	"2049897 Battery for UPS Ippon NA+ RTA 6/10K"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TA 1000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TAE 1000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TA 2000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TAE 2000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TA 3000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TAE 3000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TA 6K"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II TA 10K"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II RTA 1000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II RTA 2000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II RTA 3000"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II RTA 6k"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ II RTA 10k"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ Frosty 650"	"Serial port"	"blazer_ser"
+"Ippon"	"ups"	"2"	"Na+ Frosty 850"	"USB"	"blazer_usb"
+"Ippon"	"ups"	"2"	"Na+ Frosty 1050"	"USB"	"blazer_usb"
+"Ippon"	"ups"	"2"	"Na+ Frosty 1500"	"USB"	"blazer_usb"
+"Ippon"	"ups"	"2"	"Na+ Frosty 2000"	"USB"	"blazer_usb"
 
 "IVT"	"scd"	"1"	"SCD series"	""	"ivtscd"
 
@@ -737,6 +764,8 @@
 "Liebert"	"ups"	"3"	"PowerSure PSA 500"	"USB"	"usbhid-ups"
 "Liebert"	"ups"	"3"	"PowerSure PSA500MT3-230U"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/601
 "Liebert"	"ups"	"3"	"PowerSure PSI 1440"	"USB"	"usbhid-ups"	# http://www.emersonnetworkpower.com/en-US/Products/ACPower/Pages/LiebertPowerSurePSILineInteractiveUPS10003000VA.aspx
+"Liebert"	"ups"	"3"	"PSI5-800RT120"	"USB"	"usbhid-ups"	# https://www.vertiv.com/en-us/products-catalog/critical-power/uninterruptible-power-supplies-ups/psi5-800rt120/
+"Liebert"	"ups"	"3"	"PSI5-750MT120 (with IS-UNITY-DP SNMP card)"	""	"snmp-ups"	# https://github.com/networkupstools/nut/pull/3299
 
 "LNXI"	"pdu"	"1"	"Icebox"	"10 outlets"	"powerman-pdu (experimental)"
 
@@ -748,6 +777,8 @@
 "MasterPower"	"ups"	"3"	"MF-UPS650VA"	"USB"	"usbhid-ups"	# https://github.com/networkupstools/nut/issues/2661 - Note there are two VendorID:ProductID for KSTAR making this device
 
 "Maxxtro"	"ups"	"2"	"UPS 600 VA"	"serial port"	"blazer_ser"
+
+"Mean Well"	"ups"	"2"	"NTU Series"	""	"meanwell_ntu"
 
 "Mecer"	"ups"	"2"	"ME-1000-WTU"	"USB"	"nutdrv_qx"	# http://www.comx-computers.co.za/download/mecer/ME-1000-WTU.pdf
 "Mecer"	"ups"	"2"	"ME-2000"	""	"blazer_ser"
@@ -958,6 +989,8 @@
 "Microsol"	"ups"	"5"	"Rhino 20.0"	"20000VA"	"rhino"
 
 "Minibox"	"ups"	"5"	"openUPS Intelligent UPS"	"USB port"	"usbhid-ups"
+
+"Must"	"ups"	"4"	"EP2000Pro"	""	"must_ep2000pro"
 
 "Mustek"	"ups"	"2"	"Powermust"	"400VA Plus"	"blazer_ser"
 "Mustek"	"ups"	"2"	"Powermust"	"600VA Plus"	"blazer_ser"
@@ -1200,6 +1233,7 @@
 "Powermatic"	"ups"	"2"	"Cleanline L-1000C"	"USB"	"nutdrv_qx"	# https://alioth-lists.debian.net/pipermail/nut-upsdev/2024-September/008015.html
 
 "PowerShield"	"ups"	"2"	"Defender 1200VA"	"USB"	"blazer_usb"
+"PowerShield"	"ups"	"2"	"PSDR800"	"USB"	"nutdrv_qx protocol=voltronic-qs"
 
 "PowerTech"	"ups"	"1"	"Comp1000"	"DTR cable power"	"genericups upstype=3"
 "PowerTech"	"ups"	"2"	"SMK-800"	""	"blazer_ser"
@@ -1257,6 +1291,27 @@
 "Powerwell"	"ups"	"1"	"PM525A/-625A/-800A/-1000A/-1250A"	""	"safenet"
 
 "Phantom"	"pdu"	"1"	"Rackable Systems"	"1 outlets"	"powerman-pdu (experimental)"
+
+"Ragtech"	"ups"	"1"	"Easy 600 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 600 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 700 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 700 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 900 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 900 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1200 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1200 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1300 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1300 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1400 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1400 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1600 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1600 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1800 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 1800 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 2000 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 2000 M2"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 2200 TI"	""	"ragtech (experimental)"
+"Ragtech"	"ups"	"1"	"Easy 2200 M2"	""	"ragtech (experimental)"
 
 "Raritan"	"pdu"	"3"	"Intelligent PDU - Dominion PX"	"no report, but should be supported"	"snmp-ups (experimental)"
 "Raritan"	"pdu"	"3"	"Metered PDU - Raritan PM"	"no report, but should be supported"	"snmp-ups (experimental)"
@@ -1331,6 +1386,7 @@
 
 "Salicru"	"ups"	"2"	"SPS ONE 700VA"	"USB"	"blazer_usb"
 "Salicru"	"ups"	"2"	"SPS ONE 900VA"	"USB"	"nutdrv_qx"	# https://github.com/networkupstools/nut/issues/1623
+"Salicru"	"ups"	"2"	"SPS 500 ONE"	"USB"	"nutdrv_qx (USB ID 0665:5161)"	# https://github.com/networkupstools/nut/issues/3079
 "Salicru"	"ups"	"2"	"SPS ONE 2000VA"	"USB"	"nutdrv_qx"	# https://www.salicru.com/en/ups/sps-one.html https://github.com/networkupstools/nut/issues/554
 "Salicru"	"ups"	"3"	"SPS 650/850 HOME"	"usb"	"usbhid-ups (experimental)"
 "Salicru"	"ups"	"3"	"SLC TWIN PRO2"	"usb"	"usbhid-ups (experimental)"	# https://github.com/networkupstools/nut/issues/450
@@ -1394,6 +1450,8 @@
 
 "SuperPower"	"ups"	"2"	"HP360, Hope-550"	""	"blazer_ser"
 
+"SVC"	"ups"	"2"	"VP-1250-LCD 1250VA"	"(USB ID 0925:1234, armac subdriver, megatec protocol)"	"nutdrv_qx"	# https://github.com/networkupstools/nut/pull/3485
+
 "SVEN"	"ups"	"2"	"Power Pro+ series"	"USB"	"blazer_usb (USB ID ffff:0000)"
 "SVEN"	"ups"	"2"	"Power Pro+ series"	"USB"	"blazer_usb (USB ID 05b8:0000)"
 "SVEN"	"ups"	"1"	"Power Pro+ series"	"USB"	"richcomm_usb (USB ID 0925:1234)"
@@ -1424,6 +1482,7 @@
 "Tecnoware"	"ups"	"2"	"Easy Power 1200"	""	"blazer_ser"
 "Tecnoware"	"ups"	"2"	"UPS ERA LCD 0.65"	"USB"	"blazer_usb langid_fix=0x409"
 "Tecnoware"	"ups"	"2"	"UPS ERA PLUS 1100"	"USB"	"blazer_usb"	# https://www.tecnoware.com/Prodotti/FGCERAPL1100/ups-era-plus-1100.aspx https://github.com/networkupstools/nut/issues/747
+"Tecnoware"	"ups"	"2"	"UPS ERA PLUS 2000"	"USB"	"blazer_usb"
 
 "Tescom"	"ups"	"2"	"LEO Plus LCD 1500A"	"USB"	"blazer_usb langid_fix=0x4095 subdriver=krauler"	# https://github.com/networkupstools/nut/issues/981
 
@@ -1520,6 +1579,7 @@
 "Tripp Lite"	"ups"	"2"	"SMART500RT1U"	"USB (older; product ID 0001, protocol 3005)"	"tripplite_usb"
 "Tripp Lite"	"ups"	"3"	"SMART500RT1U"	"USB (newer; protocol/product ID 3005)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=2853
 "Tripp Lite"	"ups"	"3"	"SMC15002URM"	"USB (protocol 3015)"	"usbhid-ups"	# https://www.tripplite.com/smartpro-120v-1-5kva-1kw-line-interactive-sine-wave-ups-2u-rack-tower-lcd-usb-db9-8-outlets~SMC15002URM
+"Tripp Lite"	"ups"	"2"	"SMX1200XLHG"	"USB (protocol 3017; USB ID: 09ae:0001)"	"tripplite_usb, may need upsid=65535"	# https://github.com/networkupstools/nut/issues/2258
 "Tripp Lite"	"ups"	"3"	"SMX1000LCD"	"USB (protocol 2005)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=3200
 "Tripp Lite"	"ups"	"3"	"SMX1000RT2U"	"USB (protocol 3015)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=2798
 "Tripp Lite"	"ups"	"3"	"SMX1050SLT"	"USB (protocol 3012)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=3249
@@ -1557,6 +1617,7 @@
 "Tripp Lite"	"ups"	"3"	"SU3000XLCD"	"USB (protocol 4004)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtSeriesID=744&txtModelID=5342
 "Tripp Lite"	"ups"	"3"	"SUINT1000RTXL2UA"	"USB (protocol 4001)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=3983
 "Tripp Lite"	"ups"	"3"	"SUINT1500RTXL2UA"	"USB (protocol 4001)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtSeriesID=934&txtModelID=2720
+"Tripp Lite"	"ups"	"3"	"SUINT1500RTXL2UA"	"Serial"	"tripplitesu"	# http://www.tripplite.com/en/products/model.cfm?txtSeriesID=934&txtModelID=2720
 "Tripp Lite"	"ups"	"3"	"SUINT2200RTXL2UA"	"USB (protocol 4001)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtSeriesID=934&txtModelID=3970
 "Tripp Lite"	"ups"	"3"	"SUINT3000RTXL2U"	"USB (protocol 4005)"	"usbhid-ups"	# http://www.tripplite.com/en/products/model.cfm?txtModelID=4523
 
@@ -1604,6 +1665,11 @@
 "Various"	"ups"	"2"	"Various Innova T"	"(USB ID 06da:0201)"	"blazer_ser or blazer_usb"
 "Various"	"ups"	"2"	"Various Innova RT"	"(USB ID 06da:0005)"	"blazer_ser or blazer_usb"
 "Various"	"ups"	"2"	"Various Innova 3/1 T"	"(USB ID 06da:0004)"	"blazer_ser or blazer_usb"
+"Various"	"ups"	"2"	"(Various USB)"	"(USB ID 0665:5161)"	"nutdrv_qx"
+"Various"	"ups"	"2"	"(Various USB)"	"Cypress Semiconductor USB to Serial (interface chip)"	"nutdrv_qx"
+"Various"	"ups"	"2"	"(Various USB)"	"INNO TECH USB to Serial (interface chip)"	"nutdrv_qx"
+"Various"	"ups"	"2"	"(Various USB)"	"Fry's Electronics MEC0003 (interface chip USB ID 0001:0000; may be accompanied by UPSmart software and use MEGA(USB) access mode there)"	"nutdrv_qx"	# Usually "no-name" UPS vendors that did not bother to register a real USB VID:PID
+"Various"	"ups"	"2"	"(Various USB)"	"ATCL FOR UPS (may be USB ID 0001:0000)"	"nutdrv_atcl_usb"	# Very rare, really; did not work for all devices even if they reported "ATCL FOR UPS" vendor/model strings
 
 "Victron/IMV"	"ups"	"1"	"(various)"	""	"victronups"
 "Victron/IMV"	"ups"	"1"	"Lite"	"crack cable"	"genericups upstype=10"
@@ -1628,7 +1694,7 @@
 "Voltronic Power"	"ups"	"2"	"Prosine 800"	"USB"	"nutdrv_qx"
 "Voltronic Power"	"ups"	"2"	"Vesta LED 850VA"	"USB"	"nutdrv_qx"
 "Voltronic Power"	"ups"	"2"	"(various)"	"Serial"	"nutdrv_qx"
-"Voltronic Power"	"ups"	"2"	"(various)"	"USB"	"nutdrv_qx"
+"Voltronic Power"	"ups"	"2"	"(various)"	"USB (especially ones with USB ID 0665:5161)"	"nutdrv_qx"
 
 "WinPower"	"ups"	"2"	"CPM-800"	""	"blazer_ser"
 

@@ -32,7 +32,7 @@
 #endif
 
 #define DRIVER_NAME	"NUT PhoenixContact Modbus driver (libmodbus link type: " NUT_MODBUS_LINKTYPE_STR ")"
-#define DRIVER_VERSION	"0.09"
+#define DRIVER_VERSION	"0.11"
 
 #define CHECK_BIT(var,pos) ((var) & (1<<(pos)))
 #define MODBUS_SLAVE_ID 192
@@ -77,24 +77,24 @@
 #define GETVAL_U16(name, fallback) (dstate_getinfo(name) ? (uint16_t)atoi(dstate_getinfo(name)) : (fallback))
 
 /* Time [s] after entering battery mode before shutdown signal (bit 15) is triggered */
-#define REG_PC_SHUTDOWN_DELAY        0x105A  /* default: 60s, range: 1–65535 */
+#define REG_PC_SHUTDOWN_DELAY        0x105A  /* default: 60s, range: 1-65535 */
 
 /* Time [s] allowed for PC to shut down before output turns off */
-#define REG_PC_SHUTDOWN_TIME         0x105D  /* default: 120s, range: 1–3600 */
+#define REG_PC_SHUTDOWN_TIME         0x105D  /* default: 120s, range: 1-3600 */
 
 /* Time [s] output is off after PC shutdown before reboot */
-#define REG_PC_RESET_TIME            0x105E  /* default: 10s, range: 0–60 */
+#define REG_PC_RESET_TIME            0x105E  /* default: 10s, range: 0-60 */
 
 /* Time [s] input voltage must be above threshold to return to mains*/
 #define REG_MAINS_RETURN_DELAY       0x1058  /* default: 10s */
 
 /* Selector mode switch: PC-Mode = 9 */
-#define REG_MODE_SELECTOR_SWITCH     0x1074  /* default: 0–9 */
+#define REG_MODE_SELECTOR_SWITCH     0x1074  /* default: 0-9 */
 
 /* --- Battery Monitoring --- */
 
 /* SOH warning threshold [%] */
-#define REG_WARNING_SOH_THRESHOLD    0x1071  /* default: 0 (disabled), range: 1–100 */
+#define REG_WARNING_SOH_THRESHOLD    0x1071  /* default: 0 (disabled), range: 1-100 */
 
 /* Switch to battery mode if below this input voltage [mV] */
 #define REG_VOLTAGE_BELOW_BATTERY    0x1056  /* example: 21000 */
@@ -225,12 +225,14 @@ void upsdrv_initinfo(void)
 	uint64_t PartNumber = 0;
 	size_t i;
 
+	upsdebugx(2, "upsdrv_initinfo");
+
+	phoenixcontact_apply_advanced_config(modbus_ctx);
+
 	for (i = 0; i < (sizeof(tab_reg) / sizeof(tab_reg[0])); i++)
 	{
 		tab_reg[i] = 0;
 	}
-
-	upsdebugx(2, "upsdrv_initinfo");
 
 	dstate_setinfo("device.mfr", "Phoenix Contact");
 
@@ -804,6 +806,11 @@ void upsdrv_help(void)
 		"\n");
 }
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
 /* list flags and values that you want to receive via -x */
 void upsdrv_makevartable(void)
 {
@@ -836,6 +843,7 @@ void upsdrv_initups(void)
 	result = mrir(modbus_ctx, 0x0004, 1, &FWVersion);
 	if (result == -1)
 	{
+		/* Try to go slower... */
 		modbus_close(modbus_ctx);
 		modbus_free(modbus_ctx);
 
@@ -860,12 +868,10 @@ void upsdrv_initups(void)
 
 		if (r < 0)
 		{
-			fatalx(EXIT_FAILURE, "UPS does not repond to read requests.");
+			fatalx(EXIT_FAILURE, "UPS does not respond to read requests.");
 		}
-
 	}
 
-	phoenixcontact_apply_advanced_config(modbus_ctx);
 	dstate_setinfo("ups.firmware", "%" PRIu16, FWVersion);
 }
 

@@ -28,7 +28,7 @@
 #include "nut_stdint.h"
 
 #define DRIVER_NAME	"Opti-UPS driver"
-#define DRIVER_VERSION	"1.08"
+#define DRIVER_VERSION	"1.09"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -101,9 +101,11 @@ enum {
 typedef struct ezfill_s {
 	const char *cmd;
 	const char *var;
-	const float scale;  /*  if 0, no conversion is done and the string
-	                        is passed to dstate as is, otherwise a float
-	                        conversion with single decimal is applied */
+
+	/* if scale is 0, no conversion is done and the
+	 * string is passed to dstate as is; otherwise a
+	 * float conversion with single decimal is applied */
+	const float scale;
 } ezfill_t;
 
 /* These can be polled right into a string usable by NUT.
@@ -132,8 +134,8 @@ static ezfill_t opti_pollv_zinto[] = {
  * test with a PS-1440RM at 230V the change is only applied to PowerSeries models.
  */
 static ezfill_t opti_pollv_ps[] = {
- 	{ "OL", "ups.load", 1.0 },
- 	{ "FF", "input.frequency", 0.1 },
+	{ "OL", "ups.load", 1.0 },
+	{ "FF", "input.frequency", 0.1 },
 	{ "BT", "ups.temperature", 0 },
 };
 
@@ -424,8 +426,9 @@ void upsdrv_initinfo(void)
 	dstate_addcmd("test.failure.start");
 	dstate_addcmd("load.off");
 	dstate_addcmd("load.on");
-	if( optimodel != OPTIMODEL_ZINTO )
-	dstate_addcmd("shutdown.stop");
+	if (optimodel != OPTIMODEL_ZINTO) {
+		dstate_addcmd("shutdown.stop");
+	}
 	dstate_addcmd("shutdown.return");
 	dstate_addcmd("shutdown.stayoff");
 	upsh.instcmd = instcmd;
@@ -602,6 +605,11 @@ void upsdrv_shutdown(void)
 void upsdrv_help(void)
 {
 	printf(HELP);
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
 }
 
 /* list flags and values that you want to receive via -x */

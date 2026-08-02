@@ -23,7 +23,7 @@
 #include <libpowerman.h>	/* pm_err_t and other beasts */
 
 #define DRIVER_NAME	"Powerman PDU client driver"
-#define DRIVER_VERSION	"0.16"
+#define DRIVER_VERSION	"0.18"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -50,8 +50,8 @@ static int reconnect_ups(void);
 static int instcmd(const char *cmdname, const char *extra)
 {
 	pm_err_t rv = PM_EBADARG;
-	char *cmdsuffix = NULL;
-	char *cmdindex = NULL;
+	const char *cmdsuffix = NULL;
+	const char *cmdindex = NULL;
 	char outletname[SMALLBUF];
 
 	/* May be used in logging below, but not as a command argument */
@@ -184,6 +184,11 @@ void upsdrv_help(void)
 {
 }
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
 /* list flags and values that you want to receive via -x */
 void upsdrv_makevartable(void)
 {
@@ -213,7 +218,7 @@ static int reconnect_ups(void)
 {
 	pm_err_t rv;
 
-	dstate_setinfo("driver.state", "reconnect.trying");
+	reconnect_trying(RECONNECT_TRYING);
 
 	upsdebugx(4, "===================================================");
 	upsdebugx(4, "= connection lost with Powerman, try to reconnect =");
@@ -223,10 +228,11 @@ static int reconnect_ups(void)
 	pm_disconnect(pm);
 
 	/* Connect to the PowerMan daemon */
-	if ((rv = pm_connect(device_path, NULL, &pm, 0)) != PM_ESUCCESS)
+	if ((rv = pm_connect(device_path, NULL, &pm, 0)) != PM_ESUCCESS) {
+		dstate_datastale();
 		return 0;
-	else {
-		dstate_setinfo("driver.state", "quiet");
+	} else {
+		reconnect_trying(RECONNECT_SUCCESS);
 		upsdebugx(4, "connection restored with Powerman");
 		return 1;
 	}

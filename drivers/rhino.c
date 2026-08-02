@@ -38,7 +38,7 @@
 #include "timehead.h"
 
 #define DRIVER_NAME	"Microsol Rhino UPS driver"
-#define DRIVER_VERSION	"0.56"
+#define DRIVER_VERSION	"0.57"
 
 /* driver description structure */
 upsdrv_info_t upsdrv_info = {
@@ -481,7 +481,7 @@ send_command( unsigned char cmd )
 	ssize_t ret = -1;
 	unsigned char ch, *psend = NULL;
 
-	if ( !(psend = xmalloc(sizeof(char) * sizes)) ) {
+	if ( !(psend = (unsigned char *)xmalloc(sizeof(char) * sizes)) ) {
 		upslogx(LOG_ERR, "send_command() failed to allocate buffer");
 		return -1;
 	}
@@ -782,6 +782,11 @@ void upsdrv_shutdown(void)
 }
 
 void upsdrv_help(void)
+{
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
 {
 }
 

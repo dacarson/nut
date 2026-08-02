@@ -137,7 +137,7 @@
 #include "usb-common.h"
 
 #define DRIVER_NAME	"Tripp Lite OMNIVS / SMARTPRO driver"
-#define DRIVER_VERSION	"0.40"
+#define DRIVER_VERSION	"0.46"
 
 /* driver description structure */
 upsdrv_info_t	upsdrv_info = {
@@ -203,7 +203,8 @@ static enum tl_model_t {
 	TRIPP_LITE_OMNIVS_2001,
 	TRIPP_LITE_SMARTPRO,
 	TRIPP_LITE_SMART_0004,
-	TRIPP_LITE_SMART_3005
+	TRIPP_LITE_SMART_3005,
+	TRIPP_LITE_SMART_3017
 } tl_model = TRIPP_LITE_UNKNOWN;
 
 /*! Are the values encoded in ASCII or binary?
@@ -218,6 +219,7 @@ static int is_binary_protocol(void)
 		case TRIPP_LITE_SMART_0004:
 		case TRIPP_LITE_OMNIVS:
 		case TRIPP_LITE_OMNIVS_2001:
+		case TRIPP_LITE_SMART_3017:
 		case TRIPP_LITE_UNKNOWN:
 #if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_COVERED_SWITCH_DEFAULT)
 # pragma GCC diagnostic push
@@ -244,6 +246,7 @@ static int is_smart_protocol(void)
 		case TRIPP_LITE_SMARTPRO:
 		case TRIPP_LITE_SMART_0004:
 		case TRIPP_LITE_SMART_3005:
+		case TRIPP_LITE_SMART_3017:
 			return 1;
 		case TRIPP_LITE_OMNIVS:
 		case TRIPP_LITE_OMNIVS_2001:
@@ -276,8 +279,6 @@ static int is_smart_protocol(void)
 #define MAX_RECV_TRIES 10
 #define RECV_WAIT_MSEC 1000	/*!< was 100 for OMNIVS; SMARTPRO units need longer */
 
-#define MAX_RECONNECT_TRIES 10
-
 #define DEFAULT_OFFDELAY   64  /*!< seconds (max 0xFF) */
 #define DEFAULT_STARTDELAY 60  /*!< seconds (max 0xFFFFFF) */
 #define DEFAULT_BOOTDELAY  64  /*!< seconds (max 0xFF) */
@@ -306,13 +307,16 @@ static usb_communication_subdriver_t	*comm_driver = &usb_subdriver;
 /* Interval notation for Q% = 10% <= [minV, maxV] <= 100%  */
 static double V_interval[2] = {MIN_VOLT, MAX_VOLT};
 
-static long battery_voltage_nominal = 12,
-	   input_voltage_nominal = 120,
-	   input_voltage_scaled = 120,
-	/* input_voltage_maximum = -1,
-	   input_voltage_minimum = -1, */
-	   switchable_load_banks = 0,
-	   unit_id = -1; /*!< range: 1-65535, most likely */
+static long
+	battery_voltage_nominal = 12,
+	input_voltage_nominal = 120,
+	input_voltage_scaled = 120,
+	/*
+	input_voltage_maximum = -1,
+	input_voltage_minimum = -1,
+	*/
+	switchable_load_banks = 0,
+	unit_id = DEFAULT_UPSID;	/*!< range: 1-65535, most likely */
 
 /*! Time in seconds to delay before shutting down. */
 static unsigned int offdelay = DEFAULT_OFFDELAY;
@@ -380,27 +384,29 @@ int match_by_unitid(usb_dev_handle *argudev, USBDevice_t *arghd, usb_ctrl_charbu
  */
 static int reconnect_ups(void)
 {
-	int ret;
+	int ret, maylog;
 
 	if (hd != NULL) {
 		return 1;
 	}
 
-	dstate_setinfo("driver.state", "reconnect.trying");
+	maylog = may_log_reconnect_trying(1);
+	reconnect_trying(RECONNECT_TRYING);
 
-	upsdebugx(2, "==================================================");
-	upsdebugx(2, "= device has been disconnected, try to reconnect =");
-	upsdebugx(2, "==================================================");
+	upsdebugx(4, "==================================================");
+	upsdebugx(4, "= device has been disconnected, try to reconnect =");
+	upsdebugx(4, "==================================================");
 
 	ret = comm_driver->open_dev(&udev, &curDevice, reopen_matcher, match_by_unitid);
 	if (ret < 1) {
-		upslogx(LOG_INFO, "Reconnecting to UPS failed; will retry later...");
+		if (maylog)
+			upslogx(LOG_INFO, "Reconnecting to UPS failed; will retry later...");
 		dstate_datastale();
 		return 0;
 	}
 
 	hd = &curDevice;
-	dstate_setinfo("driver.state", "quiet");
+	reconnect_trying(RECONNECT_SUCCESS);
 
 	return ret;
 }
@@ -491,14 +497,14 @@ static const char *hexascdump(unsigned char *msg, size_t len)
 	buf[0] = 0;
 
 	/* Dump each byte in hex: */
-	for(i=0; i<len && end-bufp>=3; i++) {
-		bufp += sprintf((char *)bufp, "%02x ", msg[i]);
+	for (i=0; i<len && (end-bufp) >= 3; i++) {
+		bufp += sprintf((char *)bufp, "%02x ", msg[i]);	/* length-checked */
 	}
 
 	/* Dump single-quoted string with printable version of each byte: */
 	if (end-bufp > 0) *bufp++ = '\'';
 
-	for(i=0; i<len && end-bufp>0; i++) {
+	for (i=0; i<len && (end-bufp) > 0; i++) {
 		*bufp++ = (unsigned char)toprint(msg[i]);
 	}
 	if (end-bufp > 0) *bufp++ = '\'';
@@ -529,6 +535,9 @@ static enum tl_model_t decode_protocol(unsigned int proto)
 		case 0x3005:
 			upslogx(LOG_INFO, "Using binary SMART protocol (%x)", proto);
 			return TRIPP_LITE_SMART_3005;
+		case 0x3017:
+			upslogx(LOG_INFO, "Using (mostly) ASCII SMART protocol (%x)", proto);
+			return TRIPP_LITE_SMART_3017;
 		default:
 			upslogx(LOG_INFO, "Unknown protocol (%04x)", proto);
 			break;
@@ -550,34 +559,98 @@ static void decode_v(const unsigned char *value)
 		battery_voltage_nominal = bv * 6;
 	}
 
- 	ivn = value[1];
+	ivn = value[1];
 	lb = value[4];
 
-	switch(ivn) {
-		case '0': input_voltage_nominal =
-			  input_voltage_scaled  = 100;
-			  break;
+	if( is_smart_protocol() && (tl_model != TRIPP_LITE_SMART_3017) ) {
+		switch(ivn) {
+			case 0:
+			case '0':
+				input_voltage_nominal =
+				input_voltage_scaled  = 100;
+				break;
 
-		case 2: /* protocol 3005 */
-		case '1': input_voltage_nominal =
-			  input_voltage_scaled  = 120;
-			  break;
+			case 1:
+			case '1':
+				input_voltage_nominal =
+				input_voltage_scaled  = 110;
+				break;
 
-		case '2': input_voltage_nominal =
-			  input_voltage_scaled  = 230;
-			  break;
+			case 2: /* protocol 3005 */
+			case '2':
+				input_voltage_nominal =
+				input_voltage_scaled  = 120;
+				break;
 
-		case '3': input_voltage_nominal = 208;
-			  input_voltage_scaled  = 230;
-			  break;
+			case 3:
+			case '3':
+				input_voltage_nominal =
+				input_voltage_scaled  = 127;
+				break;
 
-		case 6: input_voltage_nominal =
-			  input_voltage_scaled  = 230;
-			  break;
+			case 4:
+			case '4':
+				input_voltage_nominal =
+				input_voltage_scaled  = 208;
+				break;
 
-		default:
-			  upslogx(LOG_WARNING, "Unknown input voltage range: 0x%02x", (unsigned int)ivn);
-			  break;
+			case 5:
+			case '5':
+				input_voltage_nominal =
+				input_voltage_scaled  = 220;
+				break;
+
+			case 6:
+			case '6':
+				input_voltage_nominal =
+				input_voltage_scaled  = 230;
+				break;
+
+			case 7:
+			case '7':
+				input_voltage_nominal =
+				input_voltage_scaled  = 240;
+				break;
+
+			default:
+				upslogx(LOG_WARNING, "Unknown input voltage range: 0x%02x", (unsigned int)ivn);
+				break;
+		}
+	} else {
+		/* Lots of odd cases here; maybe some of the SMART protocols got mixed in, too: */
+		switch(ivn) {
+			case '0':
+				input_voltage_nominal =
+				input_voltage_scaled  = 100;
+				break;
+
+			case '1':
+				input_voltage_nominal =
+				input_voltage_scaled  = 120;
+				break;
+
+			/* UK SMX1200XLHG protocol 3017 confirmed: */
+			case '2':
+				input_voltage_nominal =
+				input_voltage_scaled  = 230;
+				break;
+
+			case '3':
+				input_voltage_nominal = 208;
+				input_voltage_scaled  = 230;
+				break;
+
+			case 6: input_voltage_nominal =
+				input_voltage_scaled  = 230;
+				break;
+
+			default:
+				upslogx(LOG_WARNING, "Unknown input voltage range: 0x%02x", (unsigned int)ivn);
+				break;
+		}
+
+		upslogx(LOG_WARNING, "Regard the input voltage range with skepticism (nominal = %ld, scaled = %ld; V[0] = 0x%02x)",
+				input_voltage_nominal, input_voltage_scaled, (unsigned int)ivn);
 	}
 
 	if( (lb >= '0') && (lb <= '9') ) {
@@ -604,8 +677,6 @@ void upsdrv_initinfo(void);
  */
 static void usb_comm_fail(int res, const char *msg)
 {
-	static int try = 0;
-
 	switch(res) {
 		case LIBUSB_ERROR_BUSY:
 			upslogx(LOG_WARNING,
@@ -616,25 +687,18 @@ static void usb_comm_fail(int res, const char *msg)
 #endif
 
 		default:
-			dstate_setinfo("driver.state", "reconnect.trying");
 			upslogx(LOG_WARNING,
 				"%s: Device detached? (error %d: %s)",
 				msg, res, nut_usb_strerror(res));
 
-			upslogx(LOG_NOTICE, "Reconnect attempt #%d", ++try);
 			hd = NULL;
 			reconnect_ups();
 
 			if(hd) {
 				upslogx(LOG_NOTICE, "Successfully reconnected");
-				try = 0;
-				dstate_setinfo("driver.state", "reconnect.updateinfo");
+				reconnect_trying(RECONNECT_UPDATEINFO);
 				upsdrv_initinfo();
-				dstate_setinfo("driver.state", "quiet");
-			} else {
-				if(try > MAX_RECONNECT_TRIES) {
-					fatalx(EXIT_FAILURE, "Too many unsuccessful reconnection attempts");
-				}
+				reconnect_trying(RECONNECT_SUCCESS);
 			}
 			break;
 	}
@@ -738,11 +802,12 @@ static void debug_message(const char *msg, size_t len)
 	unsigned char tmp_value[9];
 	char var_name[20], err_msg[80];
 
+	memset(tmp_value, 0, sizeof(tmp_value));
 	snprintf(var_name, sizeof(var_name), "ups.debug.%c", *msg);
 
 	ret = send_cmd((const unsigned char *)msg, len, tmp_value, sizeof(tmp_value));
 	if(ret <= 0) {
-		sprintf(err_msg, "Error reading '%c' value", *msg);
+		snprintf(err_msg, sizeof(err_msg), "Error reading '%c' value", *msg);
 		usb_comm_fail(ret, err_msg);
 		return;
 	}
@@ -780,8 +845,12 @@ static int soft_shutdown(void)
 	int ret;
 	unsigned char buf[256], cmd_N[]="N\0x", cmd_G[] = "G";
 
+	/* TODO: find size/format of ASCII delay command */
+	if( !is_binary_protocol() ) {
+		upslogx(LOG_WARNING, "Other commands for this UPS are binary, but the format of the shutdown delay command has not been confirmed.");
+	}
+
 	/* Already binary: */
-	/* FIXME: Assumes memory layout / endianness? */
 	cmd_N[2] = (unsigned char)(offdelay & 0x00FF);
 	cmd_N[1] = (unsigned char)(offdelay >> 8);
 	upsdebugx(3, "soft_shutdown(offdelay=%u): N", offdelay);
@@ -896,6 +965,7 @@ static int control_outlet(int outlet_id, int state)
 
 		case TRIPP_LITE_OMNIVS:
 		case TRIPP_LITE_OMNIVS_2001:
+		case TRIPP_LITE_SMART_3017:
 		case TRIPP_LITE_UNKNOWN:
 #if (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_PUSH_POP) && (defined HAVE_PRAGMA_GCC_DIAGNOSTIC_IGNORED_COVERED_SWITCH_DEFAULT)
 # pragma GCC diagnostic push
@@ -1009,7 +1079,8 @@ static int setvar(const char *varname, const char *val)
 
 	if(!strncmp(varname, "outlet.", strlen("outlet."))) {
 		char outlet_name[80];
-		char index_str[10], *first_dot, *next_dot;
+		char index_str[10];
+		const char	*first_dot, *next_dot;
 		long index_chars;
 		int  index, state, ret;
 
@@ -1074,7 +1145,7 @@ void upsdrv_initinfo(void)
 		s_msg[] = "S", u_msg[] = "U", v_msg[] = "V", w_msg[] = "W\0";
 	char *model, *model_end;
 	unsigned char proto_value[9], f_value[9], p_value[9], s_value[9],
-	     u_value[9], v_value[9], w_value[9];
+		u_value[9], v_value[9], w_value[9];
 	long va;
 	ssize_t ret;
 	unsigned int proto_number = 0;
@@ -1085,8 +1156,9 @@ void upsdrv_initinfo(void)
 		fatalx(EXIT_FAILURE, "Error reading protocol");
 	}
 
-	proto_number = ((unsigned)(proto_value[1]) << 8)
-	              | (unsigned)(proto_value[2]);
+	proto_number =
+		( (unsigned)(proto_value[1]) << 8 )
+		| (unsigned)(proto_value[2]);
 	tl_model = decode_protocol(proto_number);
 
 	if(tl_model == TRIPP_LITE_UNKNOWN)
@@ -1504,7 +1576,7 @@ void upsdrv_updateinfo(void)
 			return;
 		}
 
-		if( tl_model == TRIPP_LITE_SMARTPRO ) {
+		if( (tl_model == TRIPP_LITE_SMARTPRO) || (tl_model == TRIPP_LITE_SMART_3017) ) {
 			freq = hex2d(t_value + 3, 3);
 			dstate_setinfo("input.frequency", "%.1f", freq / 10.0);
 
@@ -1537,8 +1609,10 @@ void upsdrv_updateinfo(void)
 
 	/* - * - * - * - * - * - * - * - * - * - * - * - * - * - * - */
 
-	if( tl_model == TRIPP_LITE_OMNIVS || tl_model == TRIPP_LITE_OMNIVS_2001 ||
-	    tl_model == TRIPP_LITE_SMARTPRO || tl_model == TRIPP_LITE_SMART_0004 || tl_model == TRIPP_LITE_SMART_3005) {
+	if (tl_model == TRIPP_LITE_OMNIVS
+	 || tl_model == TRIPP_LITE_OMNIVS_2001
+	 || is_smart_protocol()
+	) {
 		/* dq ~= sqrt(dV) is a reasonable approximation
 		 * Results fit well against the discrete function used in the Tripp Lite
 		 * source, but give a continuous result. */
@@ -1569,6 +1643,7 @@ void upsdrv_updateinfo(void)
 				hex2d(l_value+1, 4)/240.0*input_voltage_scaled);
 			break;
 		case TRIPP_LITE_SMARTPRO:
+		case TRIPP_LITE_SMART_3017:
 			dstate_setinfo("ups.load", "%ld", hex2d(l_value+1, 2));
 			break;
 		case TRIPP_LITE_SMART_3005:
@@ -1614,6 +1689,11 @@ void upsdrv_updateinfo(void)
 }
 
 void upsdrv_help(void)
+{
+}
+
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
 {
 }
 

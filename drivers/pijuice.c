@@ -23,7 +23,7 @@
 #include "nut_stdint.h"
 
 #define DRIVER_NAME                         "PiJuice UPS driver"
-#define DRIVER_VERSION                      "0.15"
+#define DRIVER_VERSION                      "0.17"
 
 /*
  * Linux I2C userland is a bit of a mess until distros refresh to
@@ -84,11 +84,14 @@ static inline __s32 i2c_smbus_read_byte_data(int file, __u8 command)
 	union i2c_smbus_data data;
 	int err;
 
-	if ((err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-	                     I2C_SMBUS_BYTE_DATA, &data)) < 0)
+	if ((err = i2c_smbus_access(
+		file, I2C_SMBUS_READ, command,
+		I2C_SMBUS_BYTE_DATA, &data)) < 0
+	) {
 		return err;
-	else
+	} else {
 		return 0x0FF & data.byte;
+	}
 }
 # endif
 
@@ -99,11 +102,14 @@ static inline __s32 i2c_smbus_write_byte_data(int file, __u8 command, __u8 value
 	int err;
 
 	data.byte = value;
-	if ((err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-	                     I2C_SMBUS_BYTE_DATA, &data)) < 0)
+	if ((err = i2c_smbus_access(
+		file, I2C_SMBUS_WRITE, command,
+		I2C_SMBUS_BYTE_DATA, &data)) < 0
+	) {
 		return err;
-	else
+	} else {
 		return 0x0FF & data.byte;
+	}
 }
 # endif
 
@@ -113,11 +119,14 @@ static inline __s32 i2c_smbus_read_word_data(int file, __u8 command)
 	union i2c_smbus_data data;
 	int err;
 
-	if ((err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-	                     I2C_SMBUS_WORD_DATA, &data)) < 0)
+	if ((err = i2c_smbus_access(
+		file, I2C_SMBUS_READ, command,
+		I2C_SMBUS_WORD_DATA, &data)) < 0
+	) {
 		return err;
-	else
+	} else {
 		return 0x0FFFF & data.word;
+	}
 }
 # endif
 
@@ -128,11 +137,14 @@ static inline __s32 i2c_smbus_write_word_data(int file, __u8 command, __u16 valu
 	int err;
 
 	data.word = value;
-	if ((err = i2c_smbus_access(file, I2C_SMBUS_WRITE, command,
-	                     I2C_SMBUS_WORD_DATA, &data)) < 0)
+	if ((err = i2c_smbus_access(
+		file, I2C_SMBUS_WRITE, command,
+		I2C_SMBUS_WORD_DATA, &data)) < 0
+	) {
 		return err;
-	else
+	} else {
 		return 0x0FFFF & data.word;
+	}
 }
 # endif
 
@@ -150,11 +162,14 @@ static inline __u8* i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 	data.block[0] = length;
 	memcpy(data.block + 1, values, length);
 
-	if ((err = i2c_smbus_access(file, I2C_SMBUS_READ, command,
-	                     I2C_SMBUS_I2C_BLOCK_DATA, &data)) < 0)
+	if ((err = i2c_smbus_access(
+		file, I2C_SMBUS_READ, command,
+		I2C_SMBUS_I2C_BLOCK_DATA, &data)) < 0
+	) {
 		return NULL;
-	else
+	} else {
 		memcpy(values, &data.block[1], data.block[0]);
+	}
 
 	return values;
 }
@@ -410,9 +425,9 @@ static void get_status(void)
 			upsdebugx(1, "Power Input 5v: UNKNOWN");
 	}
 
-	if ( batteryStatus == BATT_NORMAL ||
-	     batteryStatus == BATT_CHARGING_FROM_IN ||
-	     batteryStatus == BATT_CHARGING_FROM_5V )
+	if ( batteryStatus == BATT_NORMAL
+	 ||  batteryStatus == BATT_CHARGING_FROM_IN
+	 ||  batteryStatus == BATT_CHARGING_FROM_5V )
 	{
 		get_charge_level_hi_res();
 
@@ -432,12 +447,12 @@ static void get_status(void)
 		status_set("RB");
 	}
 
-	if ( batteryStatus  <= BATT_NOT_PRESENT &&
-	     powerInput     <= POWER_PRESENT &&
-	     powerInput5vIo <= POWER_PRESENT )
+	if ( batteryStatus  <= BATT_NOT_PRESENT
+	 &&  powerInput     <= POWER_PRESENT
+	 &&  powerInput5vIo <= POWER_PRESENT )
 	{
-		if ( powerInput       == POWER_NOT_PRESENT &&
-		     ( powerInput5vIo != POWER_NOT_PRESENT ))
+		if ( powerInput       == POWER_NOT_PRESENT
+		 &&  ( powerInput5vIo != POWER_NOT_PRESENT ))
 		{
 			if ( usb_power != 1 || gpio_power != 0 )
 			{
@@ -461,9 +476,9 @@ static void get_status(void)
 				dstate_setinfo( "battery.charger.status", "%s", "resting" );
 			}
 		}
-		else if ( powerInput5vIo == POWER_NOT_PRESENT &&
-		      ( powerInput   != POWER_NOT_PRESENT &&
-		        powerInput   <= POWER_PRESENT ))
+		else if ( powerInput5vIo == POWER_NOT_PRESENT
+		      &&  powerInput     != POWER_NOT_PRESENT
+		      &&  powerInput     <= POWER_PRESENT )
 		{
 			if ( gpio_power != 1 || usb_power != 0 )
 			{
@@ -487,8 +502,8 @@ static void get_status(void)
 				dstate_setinfo( "battery.charger.status", "%s", "resting" );
 			}
 		}
-		else if ( ( powerInput     != POWER_NOT_PRESENT && powerInput     <= POWER_PRESENT ) &&
-		          ( powerInput5vIo != POWER_NOT_PRESENT && powerInput5vIo <= POWER_PRESENT ))
+		else if ( ( powerInput     != POWER_NOT_PRESENT && powerInput     <= POWER_PRESENT )
+		       && ( powerInput5vIo != POWER_NOT_PRESENT && powerInput5vIo <= POWER_PRESENT ))
 		{
 			if ( usb_power != 1 || gpio_power != 1 )
 			{
@@ -775,6 +790,13 @@ static void get_i2c_address(void)
 
 void upsdrv_initinfo(void)
 {
+	/* probe ups type */
+	get_firmware_version();
+
+	/* get variables and flags from the command line */
+
+	if (getval("i2c_address"))
+		i2c_address = atoi(getval("i2c_address"));
 
 	dstate_setinfo( "ups.mfr", "%s", "PiJuice" );
 	dstate_setinfo( "ups.type", "%s", "HAT" );
@@ -864,6 +886,11 @@ void upsdrv_help(void)
 	printf("\n");
 }
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
 void upsdrv_makevartable(void)
 {
 	addvar(VAR_VALUE, "i2c_address", "Override i2c address setting");
@@ -872,14 +899,6 @@ void upsdrv_makevartable(void)
 void upsdrv_initups(void)
 {
 	upsfd = open_i2c_bus( device_path, i2c_address );
-
-	/* probe ups type */
-	get_firmware_version();
-
-	/* get variables and flags from the command line */
-
-	if (getval("i2c_address"))
-		i2c_address = atoi(getval("i2c_address"));
 }
 
 void upsdrv_cleanup(void)
