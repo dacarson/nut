@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3795 utf-8
+personal_ws-1.1 en 3799 utf-8
 AAC
 AAS
 ABI
@@ -1621,6 +1621,7 @@ additionalSOLibSearchPath
 addons
 addr
 addrange
+adduser
 addvar
 addvars
 ade
@@ -1750,6 +1751,7 @@ batchable
 batt
 battcap
 batteryPercentage
+batteryreset
 battext
 battlow
 battnumb
@@ -2174,6 +2176,7 @@ extradata
 faa
 fabula
 facto
+factoryreset
 fafc
 failmode
 failover
@@ -3190,6 +3193,7 @@ rw
 réseau
 safenet
 salicru
+sampleperiod
 sbin
 sbindir
 sc
