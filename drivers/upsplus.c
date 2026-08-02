@@ -2220,3 +2220,9 @@ void upsdrv_cleanup(void)
   close(upsfd);
 }
 
+/* optionally tweak prognames[] entries */
+void upsdrv_tweak_prognames(void)
+{
+}
+
+
