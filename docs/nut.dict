@@ -1,4 +1,4 @@
-personal_ws-1.1 en 3793 utf-8
+personal_ws-1.1 en 3795 utf-8
 AAC
 AAS
 ABI
@@ -1455,6 +1455,7 @@ UPSOutletSystemOutletDelayBeforeReboot
 UPSOutletSystemOutletDelayBeforeShutdown
 UPSOutletSystemOutletDelayBeforeStartup
 UPSOutletSystemOutletSwitchable
+UPSPlus
 UPSSTATSPATH
 UPSTEMP
 UPScode
@@ -3606,6 +3607,7 @@ upsnotify
 upsonbatt
 upspass
 upspasswd
+upsplus
 upsrw
 upssched
 upssched's
