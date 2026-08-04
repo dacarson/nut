@@ -250,7 +250,6 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define USBC_POWER_CONNECTED                0x1
 #define MICROUSB_POWER_CONNECTED            0x2
 
-#define CHARGE_CURRENT_THRESHOLD            0.20
 #define USBC_NOMINAL_VOLTAGE                9.00
 #define MICROUSB_NOMINAL_VOLTAGE            5.00
 
@@ -356,7 +355,15 @@ static uint8_t get_battery_low_charge_cmd(void)
  */
 static int16_t battery_full = -1;
 static int16_t battery_low = -1;
+static int16_t battery_empty = -1;
 static int8_t ups_auto_restart = -1;
+
+/* Whether the user has overridden full/empty/low battery voltages
+ * (BATTERY_PARAM_CUSTOM_ENABLE), disabling the firmware's own
+ * self-programming. When set, battery.charge may never reach 100%
+ * (or may reach it early) against real voltage, so it can't be trusted
+ * to gate charging status. */
+static uint8_t battery_param_custom = BATTERY_PARAM_CUSTOM_DISABLE;
 
 /* Current battery voltage is used in multiple
  calculations, so cache it temporarily. mV
@@ -1060,7 +1067,13 @@ static void get_status(void)
     status_set("HB");
   }
   
-  if (battery_current > CHARGE_CURRENT_THRESHOLD) {
+  /* Only trust battery_charge_level to gate CHRG off at 100% when the
+   * firmware determined full/empty itself. If the user overrode those
+   * voltages, the percentage may hit (or miss) 100% independent of whether
+   * the battery is actually still taking charge, so fall back to current
+   * direction alone. */
+  if (battery_current > 0 &&
+      (battery_param_custom == BATTERY_PARAM_CUSTOM_ENABLE || battery_charge_level < 100)) {
     upsdebugx(1, "Battery Status: Charging");
     dstate_setinfo("battery.charger.status", "%s", "charging");
     status_set("CHRG");
@@ -1134,16 +1147,32 @@ static void get_battery_voltage(void)
 
 static void estimate_battery_runtime(float power_consumption)
 {
+  float nominal_voltage;
   float total_battery_capacity;
   float remaining_energy;
   int runtime_seconds;
-  
+  static float smoothed_power = -1.0;
+
   upsdebugx(3, __func__);
 
-  /* Use current battery voltage rather than full-charge threshold for a more
-   * accurate estimate of remaining energy as the pack voltage sags under load.
+  /* Use a fixed nominal pack voltage (midpoint of the configured full/empty
+   * thresholds) rather than the live, load-sagging battery voltage.
+   * battery_charge_level (%) is itself derived from that same full/empty
+   * voltage range by the firmware, so scaling capacity by *both* the live,
+   * sagging voltage *and* the charge percentage double-counts voltage sag:
+   * a momentary sag under load knocks down both terms at once, producing
+   * an exaggerated, jumpy runtime estimate (e.g. a cliff-drop the instant
+   * a load turns on, even though the charge percentage barely moved).
+   * Keeping the capacity term fixed leaves runtime tracking charge_level
+   * cleanly.
    */
-  total_battery_capacity = (battery_voltage / 1000.0) * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
+  if (battery_full > 0 && battery_empty > 0 && battery_full > battery_empty) {
+    nominal_voltage = ((battery_full + battery_empty) / 2) / 1000.0;
+  } else {
+    /* Full/empty thresholds not yet available; fall back to live voltage */
+    nominal_voltage = battery_voltage / 1000.0;
+  }
+  total_battery_capacity = nominal_voltage * DEFAULT_BATTERY_CAPACITY_Ah * BATTERY_CELL_COUNT;
   remaining_energy = total_battery_capacity * (float)battery_charge_level / 100.0;
   
   /* Handle edge cases that cause extreme runtime spikes */
@@ -1151,16 +1180,26 @@ static void estimate_battery_runtime(float power_consumption)
     upsdebugx(2, "Power consumption too low (%0.6fW) for runtime calculation, skipping", power_consumption);
     return;
   }
-  
-  runtime_seconds = (int)(remaining_energy * 60.0 * 60.0 / power_consumption);
+
+  /* Smooth the instantaneous power reading (it is a single INA219 sample and
+   * spikes with transient load, e.g. WiFi/USB bursts) so the runtime estimate
+   * reflects sustained load rather than jittering with every poll cycle.
+   */
+  if (smoothed_power < 0.0) {
+    smoothed_power = power_consumption;
+  } else {
+    smoothed_power = (smoothed_power * 0.8) + (power_consumption * 0.2);
+  }
+
+  runtime_seconds = (int)(remaining_energy * 60.0 * 60.0 / smoothed_power);
 
   /* Runtime over 7 days is unreasonable, skip reporting for this cycle */
   if (runtime_seconds > 604800) {
     upsdebugx(2, "Calculated runtime (%ds) exceeds 7 days, ignoring", runtime_seconds);
     return;
   }
-  
-  upsdebugx(1, "Battery runtime: %ds", runtime_seconds);
+
+  upsdebugx(1, "Battery runtime: %ds (power %0.3fW, smoothed %0.3fW)", runtime_seconds, power_consumption, smoothed_power);
   dstate_setinfo("battery.runtime", "%d", runtime_seconds);
 }
 
@@ -1559,6 +1598,7 @@ static void get_battery_empty(void)
   
   upsdebugx(1, "Battery Voltage Empty: %0.3fV", data / 1000.0);
   if (data >= BATTERY_VOLTAGE_MINIMUM && data <= BATTERY_VOLTAGE_MAXIMUM) {
+    battery_empty = data;
     dstate_setinfo("battery.voltage.empty", "%0.3f", data / 1000.0);
   }
 }
@@ -1579,6 +1619,8 @@ static void get_battery_param_custom(void)
     return;
   }
   
+  battery_param_custom = data;
+
   upsdebugx(1, "Battery parameter custom: %s",
             data == BATTERY_PARAM_CUSTOM_ENABLE ? "enabled" : "disabled");
   dstate_setinfo("battery.param.custom", "%s",
