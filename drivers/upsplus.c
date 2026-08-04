@@ -183,8 +183,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_TEMPERATURE_CMD             0x0B
 #define BATTERY_TEMPERATURE_MINIMUM         -20
 #define BATTERY_TEMPERATURE_MAXIMUM         65
-/* Note: the forced temperature protection cannot be turned off, threshold: 65 degrees! */
-#define BATTERY_TEMPERATURE_ALARM           60/* Warn before the un-disableable 65C forced shutdown hits */
+#define BATTERY_TEMPERATURE_ALARM           65/* IP5328's own NTC-based over-temp protection (see documents/UPSPlus_Hardware_Chips.md); doesn't cut RPi power (RPi runs off VREG, independent of the discharge path it protects), so there is no separate forced-shutdown event to warn ahead of */
 
 #define BATTERY_FULL_CMD                    0x0D
 #define BATTERY_EMPTY_CMD                   0x0F
@@ -1098,8 +1097,10 @@ static void get_status(void)
     status_set("OVER");
   }
 
-  /* Firmware enforces a hard, un-disableable forced shutdown at
-   * BATTERY_TEMPERATURE_MAXIMUM (65C). Warn before that hits. */
+  /* Battery over-temperature: matches IP5328's own NTC protection point.
+   * This does not directly cut RPi power (RPi runs off VREG, independent
+   * of the discharge path IP5328's NTC governs) - see documents/
+   * UPSPlus_Hardware_Chips.md, "Thermal protections". */
   if (battery_temperature >= BATTERY_TEMPERATURE_ALARM) {
     upsdebugx(1, "UPS Status: Alarm (battery temperature %dC)", battery_temperature);
     dstate_setinfo("ups.alarm", "High battery temperature (%dC)", battery_temperature);
@@ -1350,10 +1351,15 @@ static void get_realtime_battery_state(void)
     upsdebugx(1, "Battery Current: %0.3fA", battery_current);
     dstate_setinfo("battery.current", "%0.3f", battery_current);
 
-    /* If discharging, estimate time based on battery power */
-    if (power_state == POWER_NOT_CONNECTED) {
+    {
       float power_W = fabs((battery_voltage / 1000.0) * battery_current);
-      estimate_battery_runtime(power_W);
+      upsdebugx(1, "Battery Power: %0.3fW", power_W);
+      dstate_setinfo("battery.power", "%0.3f", power_W);
+
+      /* If discharging, estimate time based on battery power */
+      if (power_state == POWER_NOT_CONNECTED) {
+        estimate_battery_runtime(power_W);
+      }
     }
     return;
   }
@@ -1398,8 +1404,8 @@ static void get_realtime_battery_state(void)
   
   I2C_READ_WORD_INA219(ina219_fd, INA219_POWER_CMD, __func__)
   upsdebugx(1, "INA219 Battery Power: %0.3fW", data * BATTERY_POWER_LSB_MAGIC);
-  /* dstate_setinfo( "battery.power", "%0.3f", data * BATTERY_POWER_LSB_MAGIC ); */
-  
+  dstate_setinfo("battery.power", "%0.3f", data * BATTERY_POWER_LSB_MAGIC);
+
   // If discharging, estimate time based on battery power
   if (power_state == POWER_NOT_CONNECTED) {
     estimate_battery_runtime(data * BATTERY_POWER_LSB_MAGIC);
@@ -1445,6 +1451,7 @@ static void get_serial_number(void)
   /* If we've already read it once, just publish the cached value */
   if (serial_initialized) {
     dstate_setinfo("device.serial", "%s", serial_cached);
+    dstate_setinfo("ups.serial", "%s", serial_cached);
     upsdebugx(2, "Serial Number (cached): %s", serial_cached);
     return;
   }
@@ -1483,6 +1490,7 @@ static void get_serial_number(void)
   serial_initialized = 1;
   upsdebugx(1, "Serial Number: %s", serial_cached);
   dstate_setinfo("device.serial", "%s", serial_cached);
+  dstate_setinfo("ups.serial", "%s", serial_cached);
 }
 
 static void get_battery_nominal(void)
@@ -1889,7 +1897,13 @@ static void check_operating_state(void)
   
   upsdebugx(3, "Checking operating state with sampled USB-C: %0.3fV, MicroUSB: %0.3fV",
             usbc_mv / 1000.0, microusb_mv / 1000.0);
-  
+
+  /* Non-standard fields: both input rails are sampled by the MCU regardless of which
+   * one is actually powering the UPS, so publish both independent of input.voltage
+   * (which only reflects whichever source is active). */
+  dstate_setinfo("input.voltage.usbc", "%0.3f", usbc_mv / 1000.0);
+  dstate_setinfo("input.voltage.microusb", "%0.3f", microusb_mv / 1000.0);
+
   if (usbc_mv > USB_VOLTAGE_MINIMUM) {
     power_state = USBC_POWER_CONNECTED;
     upsdebugx(1, "USB-C Input Voltage: %0.3fV", usbc_mv / 1000.0);
