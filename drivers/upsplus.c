@@ -184,6 +184,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define BATTERY_TEMPERATURE_MINIMUM         -20
 #define BATTERY_TEMPERATURE_MAXIMUM         65
 /* Note: the forced temperature protection cannot be turned off, threshold: 65 degrees! */
+#define BATTERY_TEMPERATURE_ALARM           60/* Warn before the un-disableable 65C forced shutdown hits */
 
 #define BATTERY_FULL_CMD                    0x0D
 #define BATTERY_EMPTY_CMD                   0x0F
@@ -357,6 +358,11 @@ static int16_t battery_full = -1;
 static int16_t battery_low = -1;
 static int16_t battery_empty = -1;
 static int8_t ups_auto_restart = -1;
+
+/* Last-read battery temperature (C), cached for get_status() to check against
+ * BATTERY_TEMPERATURE_ALARM. Below BATTERY_TEMPERATURE_MINIMUM until first
+ * valid read, so ALARM can't be raised on stale/uninitialized data. */
+static int16_t battery_temperature = BATTERY_TEMPERATURE_MINIMUM - 1;
 
 /* Whether the user has overridden full/empty/low battery voltages
  * (BATTERY_PARAM_CUSTOM_ENABLE), disabling the firmware's own
@@ -1091,6 +1097,16 @@ static void get_status(void)
     status_set("OVER");
   }
 
+  /* Firmware enforces a hard, un-disableable forced shutdown at
+   * BATTERY_TEMPERATURE_MAXIMUM (65C). Warn before that hits. */
+  if (battery_temperature >= BATTERY_TEMPERATURE_ALARM) {
+    upsdebugx(1, "UPS Status: Alarm (battery temperature %dC)", battery_temperature);
+    dstate_setinfo("ups.alarm", "High battery temperature (%dC)", battery_temperature);
+    status_set("ALARM");
+  } else {
+    dstate_setinfo("ups.alarm", "%s", "");
+  }
+
   {
     uint8_t shutdown_timer = get_memory_byte(SHUTDOWN_TIMER_CMD - UPSPLUS_MEMORY_START);
     if (shutdown_timer >= 10 && shutdown_timer < 255) {
@@ -1117,6 +1133,7 @@ static void get_battery_temperature(void)
   upsdebugx(1, "Battery Temperature: %dC", data);
   if (data >=  BATTERY_TEMPERATURE_MINIMUM &&
       data <= BATTERY_TEMPERATURE_MAXIMUM) {
+    battery_temperature = data;
     dstate_setinfo("battery.temperature", "%d", data);
   } else {
     upsdebugx(2, "Battery Temperature out of range, skipping");
