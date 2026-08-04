@@ -258,7 +258,8 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define MAX_PEAK_LOAD                       40.0/* (5V x 8A) */
 #define DEFAULT_BATTERY_CAPACITY_Ah         3.5
 #define BATTERY_CELL_COUNT                  2
-#define TIMER_MINIMUM                       5
+#define TIMER_MINIMUM_LEGACY_FW              5   /* Original vendor firmware (< 20): shutdown/reboot timers accept values from 5s */
+#define TIMER_MINIMUM_FIXED_FW               10  /* Corrected firmware (>= 20): valid range is 0 (off) or 10-255s */
 #define SHUTDOWN_TIMER                      20
 #define AUTO_SHUTDOWN_TIME                  240
 #define DEFAULT_CHARGE_LOW                  10
@@ -1109,7 +1110,8 @@ static void get_status(void)
 
   {
     uint8_t shutdown_timer = get_memory_byte(SHUTDOWN_TIMER_CMD - UPSPLUS_MEMORY_START);
-    if (shutdown_timer >= 10 && shutdown_timer < 255) {
+    uint8_t shutdown_timer_min = (firmware_version < 20) ? TIMER_MINIMUM_LEGACY_FW : TIMER_MINIMUM_FIXED_FW;
+    if (shutdown_timer >= shutdown_timer_min && shutdown_timer < 255) {
       upsdebugx(1, "UPS Status: Forced Shutdown (timer %ds)", shutdown_timer);
       status_set("FSD");
     }
@@ -1710,9 +1712,11 @@ static void get_power_off_timer(void)
     return;
   }
   
-  /* Validate timer value according to spec: 0 (not running) or 10-255 (running) */
+  /* Validate timer value according to spec: 0 (not running) or 10-255 (running) on
+  corrected firmware (>= 20); original vendor firmware has no enforced minimum, so any
+  nonzero value below 10 seen there is a legitimate mid-countdown reading, not garbage. */
   /* See spirous 255 values appear, if so assume they are bad */
-  if ((data != 0 && data < 10) || data == 255) {
+  if ((data != 0 && firmware_version >= 20 && data < TIMER_MINIMUM_FIXED_FW) || data == 255) {
     upsdebugx(1, "Invalid shutdown timer value: %ds (spec: 0 or 10-255), resetting to 0", data);
     data = 0;
   }
@@ -1751,9 +1755,11 @@ static void get_reboot_timer(void)
     return;
   }
   
-  /* Validate timer value according to spec: 0 (not running) or 10-255 (running) */
+  /* Validate timer value according to spec: 0 (not running) or 10-255 (running) on
+  corrected firmware (>= 20); original vendor firmware's reboot timer only ever actually
+  fires at exactly 5, so a mid-countdown reading below 10 there is legitimate, not garbage. */
   /* See spirous 255 values appear, if so assume they are bad */
-  if ((data != 0 && data < TIMER_MINIMUM) || data == 255) {
+  if ((data != 0 && firmware_version >= 20 && data < TIMER_MINIMUM_FIXED_FW) || data == 255) {
     upsdebugx(1, "Invalid reboot timer value: %ds (spec: 0 or 10-255)", data);
     data = 0;
   }
@@ -1983,7 +1989,8 @@ static int upsplus_setvar(const char *key, const char *value)
   }
   
   if (!strcasecmp(key, "ups.timer.shutdown")) {
-    if (str_to_short(value, &data, 10) && data >= TIMER_MINIMUM) {
+    short min_timer = (firmware_version < 20) ? TIMER_MINIMUM_LEGACY_FW : TIMER_MINIMUM_FIXED_FW;
+    if (str_to_short(value, &data, 10) && data >= min_timer) {
       set_power_off_timer(data);
       return STAT_SET_HANDLED;
     }
@@ -1992,7 +1999,8 @@ static int upsplus_setvar(const char *key, const char *value)
   }
   
   if (!strcasecmp(key, "ups.timer.reboot")) {
-    if (str_to_short(value, &data, 10) && data >= TIMER_MINIMUM) {
+    short min_timer = (firmware_version < 20) ? TIMER_MINIMUM_LEGACY_FW : TIMER_MINIMUM_FIXED_FW;
+    if (str_to_short(value, &data, 10) && data >= min_timer) {
       set_reboot_timer(data);
       return STAT_SET_HANDLED;
     }
@@ -2027,7 +2035,7 @@ static int upsplus_instcmd(const char *cmd, const char *reserved)
   upsdebugx(2, "In %s with %s and extra %s.", __func__, cmd, reserved);
   
   if (!strcasecmp(cmd, "load.off.delay")) {
-    set_power_off_timer(TIMER_MINIMUM);
+    set_power_off_timer((firmware_version < 20) ? TIMER_MINIMUM_LEGACY_FW : TIMER_MINIMUM_FIXED_FW);
     return STAT_INSTCMD_HANDLED;
   }
 
@@ -2050,15 +2058,21 @@ static int upsplus_instcmd(const char *cmd, const char *reserved)
   
   if (!strcasecmp(cmd, "shutdown.return")) {
     /* Reboot timer ignores auto restart setting, and always restarts */
-    /* Reboot timer is also broken and only works if
-    the timer is set to 5 seconds */
-    set_reboot_timer(5);
+    if (firmware_version < 20) {
+      /* Original vendor firmware: reboot timer is broken and only
+      works if the timer is set to 5 seconds */
+      set_reboot_timer(TIMER_MINIMUM_LEGACY_FW);
+    } else {
+      /* Corrected firmware: 5 seconds is below the valid 10-255s
+      range and is silently rejected, so use the minimum instead */
+      set_reboot_timer(TIMER_MINIMUM_FIXED_FW);
+    }
     return STAT_INSTCMD_HANDLED;
   }
   
   if (!strcasecmp(cmd, "shutdown.stayoff")) {
     set_ups_auto_restart(WAKEUP_ON_CHARGE_DISABLE);
-    set_power_off_timer(TIMER_MINIMUM);
+    set_power_off_timer((firmware_version < 20) ? TIMER_MINIMUM_LEGACY_FW : TIMER_MINIMUM_FIXED_FW);
     return STAT_INSTCMD_HANDLED;
   }
   
@@ -2068,9 +2082,15 @@ static int upsplus_instcmd(const char *cmd, const char *reserved)
   }
   
   if (!strcasecmp(cmd, "shutdown.reboot.graceful")) {
-    /* Reboot timer is broken, it will only work if the timer is
-    set to 5 seconds or less */
-    set_reboot_timer(5);
+    if (firmware_version < 20) {
+      /* Original vendor firmware: reboot timer is broken, it will
+      only work if the timer is set to 5 seconds or less */
+      set_reboot_timer(TIMER_MINIMUM_LEGACY_FW);
+    } else {
+      /* Corrected firmware: 5 seconds is below the valid 10-255s
+      range and is silently rejected, so use the minimum instead */
+      set_reboot_timer(TIMER_MINIMUM_FIXED_FW);
+    }
     return STAT_INSTCMD_HANDLED;
   }
   
