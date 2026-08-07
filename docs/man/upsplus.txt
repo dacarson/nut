@@ -22,11 +22,17 @@ SUPPORTED HARDWARE
 ------------------
 
 The *upsplus* driver supports the portable UPSPlus HAT UPS (EP-0136) for Raspberry Pi
-embedded PCs. The hardware only supports a 'Protected Voltage' aka low voltage and
-not a battery.charge.low percent. so there may be rounding errors when you get/set 
-battery.charge.low values.
+embedded PCs.
 
-Tested with UPSPlus HAT, Firmware: 10
+On firmware < 20, the hardware only supports a 'Protected Voltage' aka low voltage and
+not a battery.charge.low percent, so there may be rounding errors when you get/set
+battery.charge.low values. Firmware 20+ stores battery.charge.low directly as a
+percentage, so this rounding does not occur.
+
+Tested with UPSPlus HAT, Firmware: 10 and 20+. Firmware 20 corrected several
+timer bugs present in the original vendor firmware; the driver detects the
+firmware version and adjusts timer behavior accordingly (see
+*ups.timer.reboot* and *ups.timer.shutdown* below).
 
 EXTRA ARGUMENTS
 ---------------
@@ -86,13 +92,23 @@ writable: Override the automatic detection of the empty battery voltage level in
 writable: remaining battery charge percentage for low battery warning in % (0-100)
 
 *ups.timer.reboot*::
-writable: Start the UPS reboot timer in sec (10-255)
+writable: Start the UPS reboot timer in sec (10-255 on firmware 20+, 5-255 on
+firmware < 20)
 
 *ups.timer.shutdown*::
-writable: Start the UPS shutdown timer in sec (10-255)
+writable: Start the UPS shutdown timer in sec (10-255 on firmware 20+, 5-255 on
+firmware < 20)
 
 *ups.start.auto*::
 writable: Restart when power is connected (yes/no)
+
+*input.voltage.usbc*::
+read only: Non-standard field. Voltage sampled on the USB-C input (V),
+regardless of whether it is the active power source.
+
+*input.voltage.microusb*::
+read only: Non-standard field. Voltage sampled on the Micro-USB input (V),
+regardless of whether it is the active power source.
 
 INSTALLATION
 ------------
@@ -118,7 +134,10 @@ Make sure that the username the driver is running as is a member of the i2c grou
 KNOWN ISSUES AND BUGS
 ---------------------
 
-
+If the battery temperature reaches 65C, `ups.status` includes `ALARM` and
+`ups.alarm` describes the reading. This matches the IP5328 chip's own
+NTC-based over-temperature protection point but does not by itself cut power
+to the Raspberry Pi.
 
 AUTHORS
 -------
