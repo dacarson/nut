@@ -264,7 +264,7 @@ static inline __u8 *i2c_smbus_read_i2c_block_data(int file, __u8 command, __u8 l
 #define DEFAULT_CHARGE_LOW                  10
 
 #define DRIVER_NAME                         "UPSPlus driver"
-#define DRIVER_VERSION                      "2.3"
+#define DRIVER_VERSION                      "2.4"
 
 #define LENGTH_TEMP 256
 
